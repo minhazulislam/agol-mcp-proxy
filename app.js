@@ -30,7 +30,6 @@ connectBtn.addEventListener('click', async () => {
     connectBtn.disabled = true;
 
     try {
-        // Set up the SSE transport pointing to your FastAPI backend
         const transport = new SseClientTransport(new URL(renderUrl));
         
         mcpClient = new Client(
@@ -41,11 +40,9 @@ connectBtn.addEventListener('click', async () => {
         await mcpClient.connect(transport);
         appendMessage('system', 'Connected to MCP Server successfully!');
         
-        // Fetch the available tools (e.g., query_arcgis) to verify it works
         const tools = await mcpClient.listTools();
         appendMessage('system', `Available spatial tools: ${tools.tools.map(t => t.name).join(', ')}`);
 
-        // Enable the chat input
         userInput.disabled = false;
         sendBtn.disabled = false;
 
@@ -55,80 +52,83 @@ connectBtn.addEventListener('click', async () => {
     }
 });
 
-// Store the conversation history
+// Store the conversation history (Claude format)
 let conversationHistory = [];
 
+// 2. Handle sending messages (Claude Integration)
 sendBtn.addEventListener('click', async () => {
     const prompt = userInput.value.trim();
     const apiKey = apiKeyInput.value.trim();
     
     if (!prompt) return;
-    if (!apiKey) return alert("Please enter your OpenAI API Key first.");
+    if (!apiKey) return alert("Please enter your Anthropic API Key first.");
 
-    // Display user message
     appendMessage('user', prompt);
     userInput.value = '';
     
-    // Add to history
+    // Add user message to history
     conversationHistory.push({ role: "user", content: prompt });
-    appendMessage('system', 'Thinking...');
+    appendMessage('system', 'Claude is thinking...');
 
     try {
-        // 1. Fetch available tools from your Render server
+        // Fetch and format tools for Claude
         const mcpToolsResult = await mcpClient.listTools();
-        
-        // 2. Format MCP tools into the format OpenAI expects
-        const openAITools = mcpToolsResult.tools.map(tool => ({
-            type: "function",
-            function: {
-                name: tool.name,
-                description: tool.description,
-                parameters: tool.inputSchema // MCP uses standard JSON schema, which OpenAI loves
-            }
+        const claudeTools = mcpToolsResult.tools.map(tool => ({
+            name: tool.name,
+            description: tool.description,
+            input_schema: tool.inputSchema // MCP schema maps cleanly to Claude's input_schema
         }));
 
-        // 3. Make the initial request to the LLM
-        let response = await makeOpenAIRequest(apiKey, conversationHistory, openAITools);
-        let message = response.choices[0].message;
+        // Make the initial request to Claude
+        let response = await makeAnthropicRequest(apiKey, conversationHistory, claudeTools);
 
-        // 4. Check if the LLM wants to use your ArcGIS tool
-        if (message.tool_calls) {
-            appendMessage('system', `LLM requested tool: ${message.tool_calls[0].function.name}. Fetching spatial data...`);
+        // Check if Claude decided to use a tool
+        if (response.stop_reason === "tool_use") {
+            // Find the specific tool use blocks (Claude can return text + tool blocks together)
+            const toolUseBlocks = response.content.filter(block => block.type === "tool_use");
+            const textBlocks = response.content.filter(block => block.type === "text");
             
-            // Add the LLM's tool request to the history
-            conversationHistory.push(message);
+            // If Claude included conversational text before using the tool, display it
+            if (textBlocks.length > 0) {
+                appendMessage('assistant', textBlocks[0].text);
+            }
 
-            for (const toolCall of message.tool_calls) {
-                // Parse the arguments the LLM generated (e.g., layer_name: "watersheds")
-                const toolArgs = JSON.parse(toolCall.function.arguments);
-                
-                // 5. Execute the tool on your Render server via MCP
+            appendMessage('system', `Claude requested tool: ${toolUseBlocks[0].name}. Fetching GIS data...`);
+            
+            // Claude requires the exact tool request added to the history as an 'assistant' role
+            conversationHistory.push({ role: "assistant", content: response.content });
+
+            let toolResults = [];
+
+            // Execute the tools via your Render server
+            for (const toolUse of toolUseBlocks) {
                 const toolResult = await mcpClient.callTool({
-                    name: toolCall.function.name,
-                    arguments: toolArgs
+                    name: toolUse.name,
+                    arguments: toolUse.input
                 });
 
-                // Extract the text content from the MCP result
-                const resultText = toolResult.content[0].text;
-
-                // 6. Add the ArcGIS data back into the conversation history
-                conversationHistory.push({
-                    role: "tool",
-                    tool_call_id: toolCall.id,
-                    name: toolCall.function.name,
-                    content: resultText
+                // Package the result in Claude's specific tool_result format
+                toolResults.push({
+                    type: "tool_result",
+                    tool_use_id: toolUse.id,
+                    content: toolResult.content[0].text
                 });
             }
 
-            // 7. Send the data back to the LLM for the final answer
-            appendMessage('system', 'Data retrieved. Formulating final answer...');
-            response = await makeOpenAIRequest(apiKey, conversationHistory, openAITools);
-            message = response.choices[0].message;
+            // Append the raw GIS data back to the history as a 'user' message
+            conversationHistory.push({ role: "user", content: toolResults });
+
+            // Send the data back to Claude for the final synthesized answer
+            appendMessage('system', 'Data retrieved. Claude is analyzing the results...');
+            response = await makeAnthropicRequest(apiKey, conversationHistory, claudeTools);
         }
 
-        // 8. Display the final answer
-        appendMessage('assistant', message.content);
-        conversationHistory.push({ role: "assistant", content: message.content });
+        // Extract and display the final text answer
+        const finalContent = response.content.find(block => block.type === "text").text;
+        appendMessage('assistant', finalContent);
+        
+        // Save the final answer to history
+        conversationHistory.push({ role: "assistant", content: finalContent });
 
     } catch (error) {
         console.error(error);
@@ -136,25 +136,28 @@ sendBtn.addEventListener('click', async () => {
     }
 });
 
-// Helper function to handle the raw fetch request to OpenAI
-async function makeOpenAIRequest(apiKey, messages, tools) {
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+// Helper function to handle the raw fetch request to Anthropic
+async function makeAnthropicRequest(apiKey, messages, tools) {
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: {
             "Content-Type": "application/json",
-            "Authorization": `Bearer ${apiKey}`
+            "x-api-key": apiKey,
+            "anthropic-version": "2023-06-01",
+            // CRITICAL: Required for frontend browser calls to Claude
+            "anthropic-dangerously-allow-browser": "true" 
         },
         body: JSON.stringify({
-            model: "gpt-4o-mini", // Fast and cheap for tool calling
+            model: "claude-3-5-sonnet-20241022",
+            max_tokens: 2048,
             messages: messages,
-            tools: tools,
-            tool_choice: "auto"
+            tools: tools
         })
     });
 
     if (!response.ok) {
         const err = await response.json();
-        throw new Error(err.error?.message || "Failed to connect to LLM");
+        throw new Error(err.error?.message || "Failed to connect to Claude");
     }
 
     return await response.json();
