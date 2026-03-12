@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from mcp.server import Server
 from mcp.server.sse import SseServerTransport
+import mcp.types as types # Added to handle strict tool typing
 
 # 1. Initialize the MCP Server
 mcp = Server("agol-proxy")
@@ -22,17 +23,54 @@ AGOL_LAYERS = {
     "winter_wheat_belt":"https://services3.arcgis.com/0OPQIK59PJJqLK0A/arcgis/rest/services/Winter_Wheat_Belt/FeatureServer/0/query"
 }
 
-# 3. Update the tool to require a 'layer_name'
-@mcp.tool()
-async def query_arcgis(layer_name: str, where_clause: str = "1=1", out_fields: str = "*") -> str:
-    """
-    Query an ArcGIS Feature Layer. 
-    Valid layer_name options: 'wwtp_phosphorus', 'largest_200', 'county_p_consumption', 'p_use_ratio_ind', 'p_use_ratio_neighbor', 'corn_belt', 'cotton_belt', 'soybean_belt', 'spring_wheat_belt', 'winter_wheat_belt'.
-    Use standard SQL for the where_clause.
-    """
+# 3. Explicitly define the tool schema so the LLM knows how to use it
+@mcp.list_tools()
+async def handle_list_tools() -> list[types.Tool]:
+    return [
+        types.Tool(
+            name="query_arcgis",
+            description="Query an ArcGIS Feature Layer. Valid layer_name options: 'wwtp_phosphorus', 'largest_200', 'county_p_consumption', 'p_use_ratio_ind', 'p_use_ratio_neighbor', 'corn_belt', 'cotton_belt', 'soybean_belt', 'spring_wheat_belt', 'winter_wheat_belt'. Use standard SQL for the where_clause.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "layer_name": {
+                        "type": "string",
+                        "description": "The name of the layer to query."
+                    },
+                    "where_clause": {
+                        "type": "string",
+                        "description": "SQL where clause, default is '1=1'",
+                        "default": "1=1"
+                    },
+                    "out_fields": {
+                        "type": "string",
+                        "description": "Fields to return, default is '*'",
+                        "default": "*"
+                    }
+                },
+                "required": ["layer_name"]
+            }
+        )
+    ]
+
+# 4. Handle the actual execution when the LLM calls the tool
+@mcp.call_tool()
+async def handle_call_tool(
+    name: str, arguments: dict | None
+) -> list[types.TextContent | types.ImageContent | types.EmbeddedResource]:
+    if name != "query_arcgis":
+        raise ValueError(f"Unknown tool: {name}")
+
+    if not arguments or "layer_name" not in arguments:
+        raise ValueError("Missing required argument: layer_name")
+
+    layer_name = arguments["layer_name"]
+    where_clause = arguments.get("where_clause", "1=1")
+    out_fields = arguments.get("out_fields", "*")
+
     if layer_name not in AGOL_LAYERS:
         available = ", ".join(AGOL_LAYERS.keys())
-        return f"Error: Layer '{layer_name}' not found. Available layers are: {available}"
+        return [types.TextContent(type="text", text=f"Error: Layer '{layer_name}' not found. Available layers are: {available}")]
         
     target_url = AGOL_LAYERS[layer_name]
     
@@ -46,11 +84,11 @@ async def query_arcgis(layer_name: str, where_clause: str = "1=1", out_fields: s
     response = requests.get(target_url, params=params)
     
     if response.status_code == 200:
-        return response.text
-    return f"Error hitting ArcGIS API: {response.status_code} - {response.text}"
+        return [types.TextContent(type="text", text=response.text)]
+    return [types.TextContent(type="text", text=f"Error hitting ArcGIS API: {response.status_code} - {response.text}")]
 
 
-# 4. Configure FastAPI
+# 5. Configure FastAPI
 app = FastAPI()
 
 app.add_middleware(
