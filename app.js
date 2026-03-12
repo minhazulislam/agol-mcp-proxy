@@ -2,6 +2,11 @@
 let Client, SseClientTransport;
 let mcpClient = null;
 
+// Immediate logging to verify script loads
+console.log("===== APP.JS SCRIPT LOADED =====");
+console.log("Timestamp:", new Date().toISOString());
+console.log("User Agent:", navigator.userAgent.substring(0, 50));
+
 // UI Elements (will be populated on DOMContentLoaded)
 let chatHistory, connectBtn, sendBtn, userInput, renderUrlInput, apiKeyInput;
 
@@ -10,17 +15,22 @@ let conversationHistory = [];
 
 // Helper to add messages to the UI
 function appendMessage(role, text) {
-    if (!chatHistory) return; // UI not ready yet
+    console.log(`appendMessage called: role=${role}, text=${text}`);
+    if (!chatHistory) {
+        console.warn("chatHistory not available yet");
+        return;
+    }
     const div = document.createElement('div');
     div.className = `message ${role}`;
     div.textContent = text;
     chatHistory.appendChild(div);
     chatHistory.scrollTop = chatHistory.scrollHeight;
+    console.log("Message appended to UI");
 }
 
 // Initialize on page load
 window.addEventListener('DOMContentLoaded', async () => {
-    console.log("DOMContentLoaded fired");
+    console.log("DOMContentLoaded fired at", new Date().toISOString());
     
     // Get DOM elements
     chatHistory = document.getElementById('chat-history');
@@ -30,33 +40,61 @@ window.addEventListener('DOMContentLoaded', async () => {
     renderUrlInput = document.getElementById('render-url');
     apiKeyInput = document.getElementById('api-key');
     
-    console.log("DOM elements loaded:", { chatHistory: !!chatHistory, connectBtn: !!connectBtn });
+    console.log("DOM elements loaded:", { 
+        chatHistory: !!chatHistory, 
+        connectBtn: !!connectBtn,
+        sendBtn: !!sendBtn,
+        userInput: !!userInput,
+        renderUrlInput: !!renderUrlInput,
+        apiKeyInput: !!apiKeyInput
+    });
+    
+    // Clear initial message and add ready message
+    if (chatHistory) {
+        chatHistory.innerHTML = '';
+        appendMessage('system', 'Page loaded. Loading SDK...');
+    }
     
     try {
-        console.log("Loading MCP SDK...");
+        console.log("Loading MCP SDK from https://esm.sh/...");
         const sdk = await import("https://esm.sh/@modelcontextprotocol/sdk/client/index.js");
         Client = sdk.Client;
+        console.log("Client loaded:", !!Client);
         
         const sse = await import("https://esm.sh/@modelcontextprotocol/sdk/client/sse.js");
         SseClientTransport = sse.SseClientTransport;
+        console.log("SseClientTransport loaded:", !!SseClientTransport);
         
-        console.log("MCP SDK loaded successfully:", { Client: !!Client, SseClientTransport: !!SseClientTransport });
-        appendMessage('system', 'SDK loaded. Ready to connect!');
+        appendMessage('system', 'SDK loaded successfully! Ready to connect.');
         
         // Set up event listeners
         setupEventListeners();
     } catch (error) {
         console.error("Failed to load MCP SDK:", error);
-        appendMessage('system', `Failed to load MCP SDK: ${error.message}`);
+        console.error("Error details:", {
+            message: error.message,
+            stack: error.stack,
+            name: error.name
+        });
+        appendMessage('system', `Failed to load MCP SDK: ${error.message}. Check browser console.`);
     }
 });
 
 // Setup all event listeners
 function setupEventListeners() {
+    console.log("setupEventListeners called");
+    
     // 1. Connect to the Python Server on Render
     connectBtn.addEventListener('click', async () => {
+        console.log("=== CONNECT BUTTON CLICKED ===");
+        
         let renderUrl = renderUrlInput.value.trim();
-        if (!renderUrl) return alert("Please enter your Render SSE URL.");
+        console.log("Render URL entered:", renderUrl);
+        
+        if (!renderUrl) {
+            alert("Please enter your Render SSE URL.");
+            return;
+        }
 
         // Ensure URL has proper format
         if (!renderUrl.includes("://")) {
@@ -66,6 +104,7 @@ function setupEventListeners() {
             renderUrl = renderUrl.replace(/\/$/, "") + "/sse";
         }
 
+        console.log("Normalized URL:", renderUrl);
         appendMessage('system', 'Connecting to MCP Server...');
         connectBtn.disabled = true;
 
@@ -104,12 +143,16 @@ function setupEventListeners() {
             sendBtn.disabled = false;
 
         } catch (error) {
-            console.error("Connection error details:", error);
+            console.error("=== CONNECTION ERROR ===");
+            console.error("Error message:", error.message);
             console.error("Error stack:", error.stack);
+            console.error("Full error:", error);
             appendMessage('system', `Connection failed: ${error.message}. Check browser console for details.`);
             connectBtn.disabled = false;
         }
     });
+    
+    console.log("Connect button listener attached");
 
     // 2. Handle sending messages (Claude Integration)
     sendBtn.addEventListener('click', async () => {
