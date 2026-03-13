@@ -57,11 +57,11 @@ window.addEventListener('DOMContentLoaded', async () => {
     
     try {
         console.log("Loading MCP SDK from https://esm.sh/...");
-        const sdk = await import("https://esm.sh/@modelcontextprotocol/sdk/client/index.js");
+        const sdk = await import("https://esm.sh/@modelcontextprotocol/sdk@1.10.1/client/index.js");
         Client = sdk.Client;
         console.log("Client loaded:", !!Client);
         
-        const sse = await import("https://esm.sh/@modelcontextprotocol/sdk/client/sse.js");
+        const sse = await import("https://esm.sh/@modelcontextprotocol/sdk@1.10.1/client/sse.js");
         SseClientTransport = sse.SseClientTransport;
         console.log("SseClientTransport loaded:", !!SseClientTransport);
         
@@ -71,11 +71,6 @@ window.addEventListener('DOMContentLoaded', async () => {
         setupEventListeners();
     } catch (error) {
         console.error("Failed to load MCP SDK:", error);
-        console.error("Error details:", {
-            message: error.message,
-            stack: error.stack,
-            name: error.name
-        });
         appendMessage('system', `Failed to load MCP SDK: ${error.message}. Check browser console.`);
     }
 });
@@ -114,34 +109,21 @@ function setupEventListeners() {
             }
 
             console.log("Attempting to connect to:", renderUrl);
-            console.log("Creating SSE transport with URL");
             
-            // Create SSE transport - with explicit configuration
+            // Create SSE transport
             const transport = new SseClientTransport(new URL(renderUrl));
             console.log("SSE transport created successfully");
             
-            console.log("Creating MCP Client");
             mcpClient = new Client(
                 { name: "spatial-ai-client", version: "1.0.0" },
                 { capabilities: {} }
             );
             console.log("MCP Client created");
 
-            console.log("Connecting transport...");
-            const initOptions = {
-                protocolVersion: "2024-11-05",
-                capabilities: {},
-                clientInfo: {
-                    name: "spatial-ai-client",
-                    version: "1.0.0"
-                }
-            };
-            
             await mcpClient.connect(transport);
             appendMessage('system', 'Connected to MCP Server!');
             console.log("Connected successfully!");
             
-            console.log("Listing tools...");
             const toolsResponse = await mcpClient.listTools();
             console.log("Tools received:", toolsResponse);
             
@@ -159,29 +141,34 @@ function setupEventListeners() {
         } catch (error) {
             console.error("=== CONNECTION ERROR ===");
             console.error("Error message:", error.message);
-            console.error("Error name:", error.name);
             console.error("Error stack:", error.stack);
-            console.error("Full error object:", error);
             appendMessage('system', `Connection failed: ${error.message}. Check browser console for details.`);
             connectBtn.disabled = false;
+            mcpClient = null;
             
-            // Try to diagnose the issue
+            // Health check for diagnostics
             try {
-                const baseUrl = renderUrlInput.value.trim().replace(/\/sse$/, '');
+                const baseUrl = renderUrlInput.value.trim().replace(/\/sse$/, '').replace(/\/$/, '');
                 const healthUrl = baseUrl.includes("://") ? baseUrl : "https://" + baseUrl;
                 console.log("Attempting health check at:", healthUrl + "/health");
                 const healthResponse = await fetch(healthUrl + "/health");
                 const healthData = await healthResponse.json();
                 console.log("Health check response:", healthData);
-                appendMessage('system', `Server is running but SSE connection failed. Error: ${error.message}`);
+                appendMessage('system', `Server is reachable (/health OK) but SSE connection failed. This is likely a CORS or protocol issue.`);
             } catch (healthError) {
                 console.error("Health check also failed:", healthError);
-                appendMessage('system', `Cannot reach server at ${renderUrlInput.value}. Check URL and ensure server is running.`);
+                appendMessage('system', `Cannot reach server. Check URL and ensure your Render service is running.`);
             }
         }
     });
-    
-    console.log("Connect button listener attached");
+
+    // Handle Enter key in user input
+    userInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendBtn.click();
+        }
+    });
 
     // 2. Handle sending messages (Claude Integration)
     sendBtn.addEventListener('click', async () => {
@@ -194,6 +181,8 @@ function setupEventListeners() {
 
         appendMessage('user', prompt);
         userInput.value = '';
+        sendBtn.disabled = true;
+        userInput.disabled = true;
         
         // Add user message to history
         conversationHistory.push({ role: "user", content: prompt });
@@ -213,9 +202,8 @@ function setupEventListeners() {
             // Make the initial request to Claude
             let response = await makeAnthropicRequest(apiKey, conversationHistory, claudeTools);
 
-            // Check if Claude decided to use a tool
-            if (response.stop_reason === "tool_use") {
-                // Find the specific tool use blocks
+            // Agentic loop: keep running while Claude wants to use tools
+            while (response.stop_reason === "tool_use") {
                 const toolUseBlocks = response.content.filter(block => block.type === "tool_use");
                 const textBlocks = response.content.filter(block => block.type === "text");
                 
@@ -223,13 +211,12 @@ function setupEventListeners() {
                     appendMessage('assistant', textBlocks[0].text);
                 }
 
-                appendMessage('system', `Claude requested tool: ${toolUseBlocks[0].name}. Fetching GIS data...`);
+                appendMessage('system', `Claude is using tool: ${toolUseBlocks.map(t => t.name).join(', ')}. Fetching GIS data...`);
                 
                 conversationHistory.push({ role: "assistant", content: response.content });
 
-                let toolResults = [];
+                const toolResults = [];
 
-                // Execute the tools via your Render server
                 for (const toolUse of toolUseBlocks) {
                     try {
                         console.log("Executing tool:", toolUse.name, "with arguments:", toolUse.input);
@@ -275,6 +262,10 @@ function setupEventListeners() {
         } catch (error) {
             console.error("User prompt error:", error);
             appendMessage('system', `Error: ${error.message}`);
+        } finally {
+            sendBtn.disabled = false;
+            userInput.disabled = false;
+            userInput.focus();
         }
     });
 }
@@ -284,21 +275,26 @@ async function makeAnthropicRequest(apiKey, messages, tools) {
     try {
         console.log("Making Anthropic request with", messages.length, "messages and", tools.length, "tools");
         
+        const body = {
+            model: "claude-3-5-sonnet-20241022",
+            max_tokens: 2048,
+            messages: messages,
+        };
+
+        // Only include tools if there are any (avoids API error on empty array)
+        if (tools && tools.length > 0) {
+            body.tools = tools;
+        }
+
         const response = await fetch("https://api.anthropic.com/v1/messages", {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
                 "x-api-key": apiKey,
                 "anthropic-version": "2023-06-01",
-                // CRITICAL: Required for frontend browser calls to Claude
-                "anthropic-dangerously-allow-browser": "true" 
+                "anthropic-dangerous-allow-browser": "true"
             },
-            body: JSON.stringify({
-                model: "claude-3-5-sonnet-20241022",
-                max_tokens: 2048,
-                messages: messages,
-                tools: tools
-            })
+            body: JSON.stringify(body)
         });
 
         if (!response.ok) {
@@ -314,3 +310,4 @@ async function makeAnthropicRequest(apiKey, messages, tools) {
         console.error("Anthropic request failed:", error);
         throw error;
     }
+}

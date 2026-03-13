@@ -6,7 +6,7 @@ from fastapi.responses import FileResponse
 from starlette.requests import Request
 from mcp.server import Server
 from mcp.server.sse import SseServerTransport
-import mcp.types as types # Added to handle strict tool typing
+import mcp.types as types
 import os
 
 # 1. Initialize the MCP Server
@@ -17,16 +17,16 @@ AGOL_LAYERS = {
     "wwtp_phosphorus": "https://services3.arcgis.com/0OPQIK59PJJqLK0A/arcgis/rest/services/WWTP_Phosphorus/FeatureServer/0/query",
     "largest_200": "https://services3.arcgis.com/0OPQIK59PJJqLK0A/arcgis/rest/services/Largest_200/FeatureServer/0/query",
     "county_p_consumption": "https://services3.arcgis.com/0OPQIK59PJJqLK0A/arcgis/rest/services/County_P_Fertilizer_Avg/FeatureServer/0/query",
-    "p_use_ratio_ind":"https://services3.arcgis.com/0OPQIK59PJJqLK0A/arcgis/rest/services/County_P_Use_Ratio_Individual/FeatureServer/0/query",
-    "p_use_ratio_neighbor":"https://services3.arcgis.com/0OPQIK59PJJqLK0A/arcgis/rest/services/County_P_Use_Ratio_Neighborhood/FeatureServer/0/query",
-    "corn_belt":"https://services3.arcgis.com/0OPQIK59PJJqLK0A/arcgis/rest/services/Corn_Belt/FeatureServer/0/query",
-    "cotton_belt":"https://services3.arcgis.com/0OPQIK59PJJqLK0A/arcgis/rest/services/Cotton_Belt/FeatureServer/0/query",
-    "soybean_belt":"https://services3.arcgis.com/0OPQIK59PJJqLK0A/arcgis/rest/services/Soybean_Belt/FeatureServer/0/query",
-    "spring_wheat_belt":"https://services3.arcgis.com/0OPQIK59PJJqLK0A/arcgis/rest/services/Spring_Wheat_Belt/FeatureServer/0/query",
-    "winter_wheat_belt":"https://services3.arcgis.com/0OPQIK59PJJqLK0A/arcgis/rest/services/Winter_Wheat_Belt/FeatureServer/0/query"
+    "p_use_ratio_ind": "https://services3.arcgis.com/0OPQIK59PJJqLK0A/arcgis/rest/services/County_P_Use_Ratio_Individual/FeatureServer/0/query",
+    "p_use_ratio_neighbor": "https://services3.arcgis.com/0OPQIK59PJJqLK0A/arcgis/rest/services/County_P_Use_Ratio_Neighborhood/FeatureServer/0/query",
+    "corn_belt": "https://services3.arcgis.com/0OPQIK59PJJqLK0A/arcgis/rest/services/Corn_Belt/FeatureServer/0/query",
+    "cotton_belt": "https://services3.arcgis.com/0OPQIK59PJJqLK0A/arcgis/rest/services/Cotton_Belt/FeatureServer/0/query",
+    "soybean_belt": "https://services3.arcgis.com/0OPQIK59PJJqLK0A/arcgis/rest/services/Soybean_Belt/FeatureServer/0/query",
+    "spring_wheat_belt": "https://services3.arcgis.com/0OPQIK59PJJqLK0A/arcgis/rest/services/Spring_Wheat_Belt/FeatureServer/0/query",
+    "winter_wheat_belt": "https://services3.arcgis.com/0OPQIK59PJJqLK0A/arcgis/rest/services/Winter_Wheat_Belt/FeatureServer/0/query"
 }
 
-# 3. Explicitly define the tool schema so the LLM knows how to use it
+# 3. Define tool schema
 @mcp.list_tools()
 async def handle_list_tools() -> list[types.Tool]:
     print("[MCP] Listing tools...")
@@ -59,7 +59,7 @@ async def handle_list_tools() -> list[types.Tool]:
     print(f"[MCP] Returning {len(tools)} tools")
     return tools
 
-# 4. Handle the actual execution when the LLM calls the tool
+# 4. Handle tool execution
 @mcp.call_tool()
 async def handle_call_tool(
     name: str, arguments: dict | None
@@ -67,11 +67,9 @@ async def handle_call_tool(
     print(f"[MCP] Tool called: {name} with arguments: {arguments}")
     
     if name != "query_arcgis":
-        print(f"[MCP] Unknown tool: {name}")
         raise ValueError(f"Unknown tool: {name}")
 
     if not arguments or "layer_name" not in arguments:
-        print("[MCP] Missing layer_name argument")
         raise ValueError("Missing required argument: layer_name")
 
     layer_name = arguments["layer_name"]
@@ -81,7 +79,6 @@ async def handle_call_tool(
     if layer_name not in AGOL_LAYERS:
         available = ", ".join(AGOL_LAYERS.keys())
         error_msg = f"Error: Layer '{layer_name}' not found. Available layers are: {available}"
-        print(f"[MCP] {error_msg}")
         return [types.TextContent(type="text", text=error_msg)]
         
     target_url = AGOL_LAYERS[layer_name]
@@ -91,17 +88,15 @@ async def handle_call_tool(
         "where": where_clause,
         "outFields": out_fields,
         "f": "pjson",
-        "returnGeometry": "false" 
+        "returnGeometry": "false"
     }
     
     response = requests.get(target_url, params=params)
     
     if response.status_code == 200:
-        print(f"[MCP] Query succeeded, returning response")
         return [types.TextContent(type="text", text=response.text)]
     
     error_msg = f"Error hitting ArcGIS API: {response.status_code} - {response.text}"
-    print(f"[MCP] {error_msg}")
     return [types.TextContent(type="text", text=error_msg)]
 
 
@@ -110,29 +105,22 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], 
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Serve static files (CSS, JS)
-app.mount("/static", StaticFiles(directory="."), name="static")
-
-# Root endpoint - serve index.html
-@app.get("/")
-async def root():
-    return FileResponse("index.html")
-
-# Health check endpoint
+# Health check endpoint (define BEFORE static mount to avoid conflicts)
 @app.get("/health")
 async def health():
     return {"status": "ok", "message": "MCP Server is running"}
 
+# SSE transport
 transport = SseServerTransport("/messages")
 
 @app.get("/sse")
-async def sse(request: Request):
+async def sse_endpoint(request: Request):
     print(f"[SSE] New SSE connection from {request.client}")
     try:
         async with transport.connect_sse(request.scope, request.receive, request._send) as (read_stream, write_stream):
@@ -146,7 +134,7 @@ async def sse(request: Request):
         raise
 
 @app.post("/messages")
-async def messages(request: Request):
+async def messages_endpoint(request: Request):
     print(f"[SSE] POST /messages from {request.client}")
     try:
         await transport.handle_post_message(request.scope, request.receive, request._send)
@@ -155,3 +143,20 @@ async def messages(request: Request):
         import traceback
         traceback.print_exc()
         raise
+
+# Root endpoint - serve index.html
+@app.get("/")
+async def root():
+    return FileResponse("index.html")
+
+# Serve app.js directly at /app.js (so index.html's <script src="app.js"> works)
+@app.get("/app.js")
+async def serve_app_js():
+    return FileResponse("app.js", media_type="application/javascript")
+
+# Serve any other static files from current directory as fallback
+@app.get("/{filename}")
+async def serve_static(filename: str):
+    if os.path.exists(filename) and not filename.startswith("."):
+        return FileResponse(filename)
+    return {"error": "File not found"}, 404
