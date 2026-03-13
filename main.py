@@ -1,10 +1,13 @@
 import requests
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from starlette.requests import Request
 from mcp.server import Server
 from mcp.server.sse import SseServerTransport
 import mcp.types as types # Added to handle strict tool typing
+import os
 
 # 1. Initialize the MCP Server
 mcp = Server("agol-proxy")
@@ -98,6 +101,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Serve static files (CSS, JS)
+app.mount("/static", StaticFiles(directory="."), name="static")
+
+# Root endpoint - serve index.html
+@app.get("/")
+async def root():
+    return FileResponse("index.html")
 
 transport = SseServerTransport("/messages")
 
