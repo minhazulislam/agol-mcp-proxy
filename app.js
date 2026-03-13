@@ -1,4 +1,3 @@
-// No MCP SDK needed — we talk directly to our FastAPI REST endpoints
 console.log("===== APP.JS LOADED =====");
 
 let serverBaseUrl = null;
@@ -31,18 +30,15 @@ window.addEventListener('DOMContentLoaded', () => {
         let url = renderUrlInput.value.trim();
         if (!url) { alert("Please enter your Render Server URL."); return; }
         if (!url.includes("://")) url = "https://" + url;
-        url = url.replace(/\/+$/, "");  // strip trailing slashes
+        url = url.replace(/\/+$/, "").replace(/\/sse$/, ""); // strip /sse or trailing slash
 
         appendMessage('system', `Connecting to ${url} ...`);
         connectBtn.disabled = true;
 
         try {
-            // Hit /health to verify server is up
             const healthRes = await fetch(`${url}/health`);
             if (!healthRes.ok) throw new Error(`Server returned ${healthRes.status}`);
-            await healthRes.json();
 
-            // Fetch available tools
             const toolsRes = await fetch(`${url}/tools`);
             if (!toolsRes.ok) throw new Error(`Could not load tools: ${toolsRes.status}`);
             const toolsData = await toolsRes.json();
@@ -62,7 +58,6 @@ window.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // Enter key support
     userInput.addEventListener('keydown', e => {
         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendBtn.click(); }
     });
@@ -84,61 +79,26 @@ window.addEventListener('DOMContentLoaded', () => {
         appendMessage('system', 'Claude is thinking...');
 
         try {
-            // Load tools from server
-            const toolsData = await fetch(`${serverBaseUrl}/tools`).then(r => r.json());
-            const claudeTools = toolsData.tools.map(t => ({
-                name: t.name,
-                description: t.description,
-                input_schema: t.inputSchema
-            }));
+            // Send to our Render server — it handles Anthropic + ArcGIS server-side
+            const res = await fetch(`${serverBaseUrl}/chat`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    api_key: apiKey,
+                    messages: conversationHistory
+                })
+            });
 
-            let response = await callClaude(apiKey, conversationHistory, claudeTools);
-
-            // Agentic tool-use loop
-            while (response.stop_reason === "tool_use") {
-                const toolUseBlocks = response.content.filter(b => b.type === "tool_use");
-                const textBlocks    = response.content.filter(b => b.type === "text");
-
-                if (textBlocks.length > 0) appendMessage('assistant', textBlocks[0].text);
-                appendMessage('system', `Using tool: ${toolUseBlocks.map(t => t.name).join(', ')}...`);
-
-                conversationHistory.push({ role: "assistant", content: response.content });
-
-                const toolResults = [];
-                for (const toolUse of toolUseBlocks) {
-                    try {
-                        // Call our simple REST endpoint instead of MCP SSE
-                        const res = await fetch(`${serverBaseUrl}/call-tool`, {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ name: toolUse.name, arguments: toolUse.input })
-                        });
-                        const result = await res.json();
-                        toolResults.push({
-                            type: "tool_result",
-                            tool_use_id: toolUse.id,
-                            content: result.content[0].text
-                        });
-                    } catch (toolErr) {
-                        toolResults.push({
-                            type: "tool_result",
-                            tool_use_id: toolUse.id,
-                            content: `Error: ${toolErr.message}`,
-                            is_error: true
-                        });
-                    }
-                }
-
-                conversationHistory.push({ role: "user", content: toolResults });
-                appendMessage('system', 'Data received. Claude is analyzing...');
-                response = await callClaude(apiKey, conversationHistory, claudeTools);
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.error?.message || err.error || `Server error ${res.status}`);
             }
 
-            const finalText = response.content.find(b => b.type === "text");
-            if (finalText) {
-                appendMessage('assistant', finalText.text);
-                conversationHistory.push({ role: "assistant", content: finalText.text });
-            }
+            const data = await res.json();
+            if (data.error) throw new Error(JSON.stringify(data.error));
+
+            appendMessage('assistant', data.reply);
+            conversationHistory.push({ role: "assistant", content: data.reply });
 
         } catch (err) {
             console.error("Error:", err);
@@ -150,25 +110,3 @@ window.addEventListener('DOMContentLoaded', () => {
         }
     });
 });
-
-async function callClaude(apiKey, messages, tools) {
-    const body = { model: "claude-3-5-sonnet-20241022", max_tokens: 2048, messages };
-    if (tools && tools.length > 0) body.tools = tools;
-
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            "x-api-key": apiKey,
-            "anthropic-version": "2023-06-01",
-            "anthropic-dangerous-allow-browser": "true"
-        },
-        body: JSON.stringify(body)
-    });
-
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error?.message || `HTTP ${res.status}`);
-    }
-    return res.json();
-}
