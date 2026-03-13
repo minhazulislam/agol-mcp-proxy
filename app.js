@@ -116,39 +116,68 @@ function setupEventListeners() {
             console.log("Attempting to connect to:", renderUrl);
             console.log("Creating SSE transport with URL");
             
-            // Create SSE transport - it should fetch from the URL
+            // Create SSE transport - with explicit configuration
             const transport = new SseClientTransport(new URL(renderUrl));
-            console.log("SSE transport created:", transport);
+            console.log("SSE transport created successfully");
             
             console.log("Creating MCP Client");
             mcpClient = new Client(
-                { name: "github-pages-client", version: "1.0.0" },
+                { name: "spatial-ai-client", version: "1.0.0" },
                 { capabilities: {} }
             );
             console.log("MCP Client created");
 
             console.log("Connecting transport...");
+            const initOptions = {
+                protocolVersion: "2024-11-05",
+                capabilities: {},
+                clientInfo: {
+                    name: "spatial-ai-client",
+                    version: "1.0.0"
+                }
+            };
+            
             await mcpClient.connect(transport);
+            appendMessage('system', 'Connected to MCP Server!');
             console.log("Connected successfully!");
             
-            appendMessage('system', 'Connected to MCP Server successfully!');
-            
             console.log("Listing tools...");
-            const tools = await mcpClient.listTools();
-            console.log("Tools received:", tools);
+            const toolsResponse = await mcpClient.listTools();
+            console.log("Tools received:", toolsResponse);
             
-            appendMessage('system', `Available spatial tools: ${tools.tools.map(t => t.name).join(', ')}`);
+            if (toolsResponse.tools && toolsResponse.tools.length > 0) {
+                const toolNames = toolsResponse.tools.map(t => t.name).join(', ');
+                appendMessage('system', `Ready! Available tools: ${toolNames}`);
+            } else {
+                appendMessage('system', 'Connected but no tools available');
+            }
 
+            // Enable input
             userInput.disabled = false;
             sendBtn.disabled = false;
 
         } catch (error) {
             console.error("=== CONNECTION ERROR ===");
             console.error("Error message:", error.message);
+            console.error("Error name:", error.name);
             console.error("Error stack:", error.stack);
-            console.error("Full error:", error);
+            console.error("Full error object:", error);
             appendMessage('system', `Connection failed: ${error.message}. Check browser console for details.`);
             connectBtn.disabled = false;
+            
+            // Try to diagnose the issue
+            try {
+                const baseUrl = renderUrlInput.value.trim().replace(/\/sse$/, '');
+                const healthUrl = baseUrl.includes("://") ? baseUrl : "https://" + baseUrl;
+                console.log("Attempting health check at:", healthUrl + "/health");
+                const healthResponse = await fetch(healthUrl + "/health");
+                const healthData = await healthResponse.json();
+                console.log("Health check response:", healthData);
+                appendMessage('system', `Server is running but SSE connection failed. Error: ${error.message}`);
+            } catch (healthError) {
+                console.error("Health check also failed:", healthError);
+                appendMessage('system', `Cannot reach server at ${renderUrlInput.value}. Check URL and ensure server is running.`);
+            }
         }
     });
     

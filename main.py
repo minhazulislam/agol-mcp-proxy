@@ -29,7 +29,8 @@ AGOL_LAYERS = {
 # 3. Explicitly define the tool schema so the LLM knows how to use it
 @mcp.list_tools()
 async def handle_list_tools() -> list[types.Tool]:
-    return [
+    print("[MCP] Listing tools...")
+    tools = [
         types.Tool(
             name="query_arcgis",
             description="Query an ArcGIS Feature Layer. Valid layer_name options: 'wwtp_phosphorus', 'largest_200', 'county_p_consumption', 'p_use_ratio_ind', 'p_use_ratio_neighbor', 'corn_belt', 'cotton_belt', 'soybean_belt', 'spring_wheat_belt', 'winter_wheat_belt'. Use standard SQL for the where_clause.",
@@ -55,16 +56,22 @@ async def handle_list_tools() -> list[types.Tool]:
             }
         )
     ]
+    print(f"[MCP] Returning {len(tools)} tools")
+    return tools
 
 # 4. Handle the actual execution when the LLM calls the tool
 @mcp.call_tool()
 async def handle_call_tool(
     name: str, arguments: dict | None
 ) -> list[types.TextContent | types.ImageContent | types.EmbeddedResource]:
+    print(f"[MCP] Tool called: {name} with arguments: {arguments}")
+    
     if name != "query_arcgis":
+        print(f"[MCP] Unknown tool: {name}")
         raise ValueError(f"Unknown tool: {name}")
 
     if not arguments or "layer_name" not in arguments:
+        print("[MCP] Missing layer_name argument")
         raise ValueError("Missing required argument: layer_name")
 
     layer_name = arguments["layer_name"]
@@ -73,9 +80,12 @@ async def handle_call_tool(
 
     if layer_name not in AGOL_LAYERS:
         available = ", ".join(AGOL_LAYERS.keys())
-        return [types.TextContent(type="text", text=f"Error: Layer '{layer_name}' not found. Available layers are: {available}")]
+        error_msg = f"Error: Layer '{layer_name}' not found. Available layers are: {available}"
+        print(f"[MCP] {error_msg}")
+        return [types.TextContent(type="text", text=error_msg)]
         
     target_url = AGOL_LAYERS[layer_name]
+    print(f"[MCP] Querying {target_url} with where={where_clause}, fields={out_fields}")
     
     params = {
         "where": where_clause,
@@ -87,8 +97,12 @@ async def handle_call_tool(
     response = requests.get(target_url, params=params)
     
     if response.status_code == 200:
+        print(f"[MCP] Query succeeded, returning response")
         return [types.TextContent(type="text", text=response.text)]
-    return [types.TextContent(type="text", text=f"Error hitting ArcGIS API: {response.status_code} - {response.text}")]
+    
+    error_msg = f"Error hitting ArcGIS API: {response.status_code} - {response.text}"
+    print(f"[MCP] {error_msg}")
+    return [types.TextContent(type="text", text=error_msg)]
 
 
 # 5. Configure FastAPI
@@ -110,13 +124,34 @@ app.mount("/static", StaticFiles(directory="."), name="static")
 async def root():
     return FileResponse("index.html")
 
+# Health check endpoint
+@app.get("/health")
+async def health():
+    return {"status": "ok", "message": "MCP Server is running"}
+
 transport = SseServerTransport("/messages")
 
 @app.get("/sse")
 async def sse(request: Request):
-    async with transport.connect_sse(request.scope, request.receive, request._send) as (read_stream, write_stream):
-        await mcp.run(read_stream, write_stream, mcp.create_initialization_options())
+    print(f"[SSE] New SSE connection from {request.client}")
+    try:
+        async with transport.connect_sse(request.scope, request.receive, request._send) as (read_stream, write_stream):
+            print("[SSE] Transport connected, running MCP server...")
+            await mcp.run(read_stream, write_stream, mcp.create_initialization_options())
+            print("[SSE] MCP run completed")
+    except Exception as e:
+        print(f"[SSE] Error during SSE connection: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
 
 @app.post("/messages")
 async def messages(request: Request):
-    await transport.handle_post_message(request.scope, request.receive, request._send)
+    print(f"[SSE] POST /messages from {request.client}")
+    try:
+        await transport.handle_post_message(request.scope, request.receive, request._send)
+    except Exception as e:
+        print(f"[SSE] Error handling POST message: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
