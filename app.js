@@ -1,19 +1,9 @@
-// ============================================================
-// MCP SDK is imported at the TOP LEVEL of the module.
-// This guarantees Client and SseClientTransport are available
-// before any button click can fire.
-// ============================================================
-import { Client } from "https://esm.sh/@modelcontextprotocol/sdk@1.10.1/client/index.js";
-import { SseClientTransport } from "https://esm.sh/@modelcontextprotocol/sdk@1.10.1/client/sse.js";
+// No MCP SDK needed — we talk directly to our FastAPI REST endpoints
+console.log("===== APP.JS LOADED =====");
 
-console.log("===== APP.JS MODULE LOADED =====");
-console.log("Client:", typeof Client);
-console.log("SseClientTransport:", typeof SseClientTransport);
-
-let mcpClient = null;
+let serverBaseUrl = null;
 let conversationHistory = [];
 
-// UI element references (set after DOM is ready)
 let chatHistory, connectBtn, sendBtn, userInput, renderUrlInput, apiKeyInput;
 
 function appendMessage(role, text) {
@@ -34,41 +24,32 @@ window.addEventListener('DOMContentLoaded', () => {
     apiKeyInput    = document.getElementById('api-key');
 
     chatHistory.innerHTML = '';
-    appendMessage('system', 'Ready — enter your API key and Render URL, then click Connect.');
+    appendMessage('system', 'Enter your API key and server URL, then click Connect.');
 
-    // ── Connect button ─────────────────────────────────────────
+    // ── Connect ───────────────────────────────────────────────
     connectBtn.addEventListener('click', async () => {
-        let renderUrl = renderUrlInput.value.trim();
-        if (!renderUrl) { alert("Please enter your Render Server URL."); return; }
+        let url = renderUrlInput.value.trim();
+        if (!url) { alert("Please enter your Render Server URL."); return; }
+        if (!url.includes("://")) url = "https://" + url;
+        url = url.replace(/\/+$/, "");  // strip trailing slashes
 
-        if (!renderUrl.includes("://")) renderUrl = "https://" + renderUrl;
-        renderUrl = renderUrl.replace(/\/+$/, "");
-        if (!renderUrl.endsWith("/sse")) renderUrl += "/sse";
-
-        console.log("Connecting to:", renderUrl);
-        appendMessage('system', `Connecting to ${renderUrl} ...`);
+        appendMessage('system', `Connecting to ${url} ...`);
         connectBtn.disabled = true;
 
         try {
-            // Dispose previous client if any
-            if (mcpClient) {
-                try { await mcpClient.close(); } catch (_) {}
-                mcpClient = null;
-            }
+            // Hit /health to verify server is up
+            const healthRes = await fetch(`${url}/health`);
+            if (!healthRes.ok) throw new Error(`Server returned ${healthRes.status}`);
+            await healthRes.json();
 
-            const transport = new SseClientTransport(new URL(renderUrl));
-            mcpClient = new Client(
-                { name: "spatial-ai-client", version: "1.0.0" },
-                { capabilities: {} }
-            );
+            // Fetch available tools
+            const toolsRes = await fetch(`${url}/tools`);
+            if (!toolsRes.ok) throw new Error(`Could not load tools: ${toolsRes.status}`);
+            const toolsData = await toolsRes.json();
+            const names = toolsData.tools.map(t => t.name).join(', ');
 
-            await mcpClient.connect(transport);
-            console.log("MCP connected!");
-
-            const { tools } = await mcpClient.listTools();
-            const names = tools.map(t => t.name).join(', ');
-            appendMessage('system', `Connected! Tools available: ${names}`);
-
+            serverBaseUrl = url;
+            appendMessage('system', `Connected! Tools: ${names}`);
             userInput.disabled = false;
             sendBtn.disabled   = false;
             userInput.focus();
@@ -77,36 +58,35 @@ window.addEventListener('DOMContentLoaded', () => {
             console.error("Connection error:", err);
             appendMessage('system', `Connection failed: ${err.message}`);
             connectBtn.disabled = false;
-            mcpClient = null;
+            serverBaseUrl = null;
         }
     });
 
-    // ── Enter key sends message ────────────────────────────────
+    // Enter key support
     userInput.addEventListener('keydown', e => {
         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendBtn.click(); }
     });
 
-    // ── Send button ────────────────────────────────────────────
+    // ── Send ─────────────────────────────────────────────────
     sendBtn.addEventListener('click', async () => {
         const prompt = userInput.value.trim();
         const apiKey = apiKeyInput.value.trim();
 
         if (!prompt) return;
-        if (!apiKey)    { alert("Please enter your Anthropic API Key."); return; }
-        if (!mcpClient) { alert("Please connect to the MCP server first."); return; }
+        if (!apiKey)        { alert("Please enter your Anthropic API Key."); return; }
+        if (!serverBaseUrl) { alert("Please connect to the server first."); return; }
 
         appendMessage('user', prompt);
         userInput.value    = '';
         sendBtn.disabled   = true;
         userInput.disabled = true;
-
         conversationHistory.push({ role: "user", content: prompt });
         appendMessage('system', 'Claude is thinking...');
 
         try {
-            // Build tools list from MCP server
-            const { tools: mcpTools } = await mcpClient.listTools();
-            const claudeTools = mcpTools.map(t => ({
+            // Load tools from server
+            const toolsData = await fetch(`${serverBaseUrl}/tools`).then(r => r.json());
+            const claudeTools = toolsData.tools.map(t => ({
                 name: t.name,
                 description: t.description,
                 input_schema: t.inputSchema
@@ -127,15 +107,19 @@ window.addEventListener('DOMContentLoaded', () => {
                 const toolResults = [];
                 for (const toolUse of toolUseBlocks) {
                     try {
-                        console.log("Calling tool:", toolUse.name, toolUse.input);
-                        const result = await mcpClient.callTool({ name: toolUse.name, arguments: toolUse.input });
+                        // Call our simple REST endpoint instead of MCP SSE
+                        const res = await fetch(`${serverBaseUrl}/call-tool`, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ name: toolUse.name, arguments: toolUse.input })
+                        });
+                        const result = await res.json();
                         toolResults.push({
                             type: "tool_result",
                             tool_use_id: toolUse.id,
                             content: result.content[0].text
                         });
                     } catch (toolErr) {
-                        console.error("Tool error:", toolErr);
                         toolResults.push({
                             type: "tool_result",
                             tool_use_id: toolUse.id,
@@ -150,7 +134,6 @@ window.addEventListener('DOMContentLoaded', () => {
                 response = await callClaude(apiKey, conversationHistory, claudeTools);
             }
 
-            // Final answer
             const finalText = response.content.find(b => b.type === "text");
             if (finalText) {
                 appendMessage('assistant', finalText.text);
@@ -158,7 +141,7 @@ window.addEventListener('DOMContentLoaded', () => {
             }
 
         } catch (err) {
-            console.error("Send error:", err);
+            console.error("Error:", err);
             appendMessage('system', `Error: ${err.message}`);
         } finally {
             sendBtn.disabled   = false;
@@ -168,13 +151,8 @@ window.addEventListener('DOMContentLoaded', () => {
     });
 });
 
-// ── Anthropic API helper ───────────────────────────────────────
 async function callClaude(apiKey, messages, tools) {
-    const body = {
-        model: "claude-3-5-sonnet-20241022",
-        max_tokens: 2048,
-        messages
-    };
+    const body = { model: "claude-3-5-sonnet-20241022", max_tokens: 2048, messages };
     if (tools && tools.length > 0) body.tools = tools;
 
     const res = await fetch("https://api.anthropic.com/v1/messages", {
