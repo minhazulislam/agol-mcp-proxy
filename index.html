@@ -4,139 +4,134 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ArcGIS Spatial AI Assistant</title>
+
+    <!-- ArcGIS Maps SDK for JavaScript -->
+    <link rel="stylesheet" href="https://js.arcgis.com/4.29/esri/themes/light/main.css">
+
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-    
+
     <style>
         :root {
             --primary-color: #00619b;
             --primary-hover: #004a77;
-            --bg-color: #f0f4f8;
-            --chat-bg: #ffffff;
-            --text-color: #333333;
-            --border-color: #e2e8f0;
-            --user-msg-bg: #e1f5fe;
-            --ai-msg-bg: #f8fafc;
+            --chat-bg:       #ffffff;
+            --text-color:    #333333;
+            --border-color:  #e2e8f0;
+            --user-msg-bg:   #e1f5fe;
+            --ai-msg-bg:     #f8fafc;
         }
 
-        body {
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        html, body {
+            height: 100%;
             font-family: 'Inter', sans-serif;
-            background-color: var(--bg-color);
             color: var(--text-color);
-            margin: 0;
-            padding: 0;
-            display: flex;
-            flex-direction: column;
-            min-height: 100vh;
-            box-sizing: border-box;
         }
 
         .app-container {
-            width: 100%;
-            height: 100vh;
-            background: var(--chat-bg);
-            overflow: hidden;
             display: flex;
             flex-direction: row;
-        }
-
-        .main-content {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            background: #f5f5f5;
-        }
-
-        .dashboard-container {
-            flex: 1;
-            min-height: 0;
+            height: 100vh;
+            width: 100vw;
             overflow: hidden;
         }
 
-        .dashboard-container iframe {
-            width: 100%;
+        /* ── Interactive map fills the left side ── */
+        #mapDiv {
+            flex: 1;
             height: 100%;
-            border: none;
+            min-width: 0;
         }
 
+        /* ── Chat panel on the right ── */
         .chat-panel {
             width: 380px;
+            min-width: 300px;
+            max-width: 460px;
             background: var(--chat-bg);
             border-left: 1px solid var(--border-color);
             display: flex;
             flex-direction: column;
-            min-width: 300px;
-            max-width: 450px;
+            height: 100%;
+            flex-shrink: 0;
         }
 
         header {
             background: var(--primary-color);
             color: white;
-            padding: 16px 20px;
-            text-align: left;
-            border-bottom: 1px solid var(--border-color);
+            padding: 14px 16px;
+            flex-shrink: 0;
         }
 
         header h1 {
-            margin: 0;
-            font-size: 1.2rem;
+            font-size: 1.05rem;
             font-weight: 600;
-            letter-spacing: 0.5px;
+            letter-spacing: 0.3px;
+        }
+
+        header p {
+            font-size: 0.72rem;
+            opacity: 0.85;
+            margin-top: 3px;
         }
 
         .setup-panel {
-            padding: 14px 16px;
+            padding: 12px 14px;
             background: #fafbfc;
             border-bottom: 1px solid var(--border-color);
             display: flex;
             flex-direction: column;
-            gap: 10px;
-            max-height: 160px;
-            overflow-y: auto;
+            gap: 8px;
+            flex-shrink: 0;
         }
 
         .input-group {
             display: flex;
             flex-direction: column;
-            gap: 4px;
+            gap: 3px;
         }
 
         label {
-            font-size: 0.75rem;
+            font-size: 0.7rem;
             font-weight: 600;
             color: #475569;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
 
-        input[type="text"], input[type="password"] {
-            padding: 8px 10px;
+        input[type="text"],
+        input[type="password"] {
+            padding: 7px 10px;
             border: 1px solid #cbd5e1;
             border-radius: 4px;
-            font-size: 0.85rem;
+            font-size: 0.83rem;
             font-family: inherit;
-            transition: all 0.2s ease;
+            width: 100%;
+            transition: border-color 0.2s;
         }
 
-        input[type="text"]:focus, input[type="password"]:focus {
+        input:focus {
             outline: none;
             border-color: var(--primary-color);
-            box-shadow: 0 0 0 2px rgba(0, 97, 155, 0.1);
+            box-shadow: 0 0 0 2px rgba(0, 97, 155, 0.12);
         }
 
         button {
             background: var(--primary-color);
             color: white;
             border: none;
-            padding: 8px 14px;
+            padding: 7px 14px;
             border-radius: 4px;
-            font-size: 0.85rem;
+            font-size: 0.83rem;
             font-weight: 600;
             cursor: pointer;
-            transition: background-color 0.2s ease;
+            transition: background-color 0.2s;
             white-space: nowrap;
+            font-family: inherit;
         }
 
-        button:hover:not(:disabled) {
-            background: var(--primary-hover);
-        }
+        button:hover:not(:disabled) { background: var(--primary-hover); }
 
         button:disabled {
             background: #cbd5e1;
@@ -146,104 +141,105 @@
 
         #chat-history {
             flex: 1;
-            min-height: 0;
             overflow-y: auto;
-            padding: 16px;
+            padding: 14px;
             display: flex;
             flex-direction: column;
-            gap: 12px;
-            background-color: var(--chat-bg);
+            gap: 10px;
         }
 
         .message {
-            max-width: 95%;
-            padding: 10px 14px;
+            max-width: 96%;
+            padding: 9px 12px;
             border-radius: 8px;
             line-height: 1.5;
-            font-size: 0.9rem;
+            font-size: 0.87rem;
             word-wrap: break-word;
             white-space: pre-wrap;
         }
 
         .user {
-            background-color: var(--user-msg-bg);
+            background: var(--user-msg-bg);
             color: #0c4a6e;
             align-self: flex-end;
             border-bottom-right-radius: 2px;
         }
 
         .assistant {
-            background-color: var(--ai-msg-bg);
+            background: var(--ai-msg-bg);
             color: var(--text-color);
             align-self: flex-start;
-            border-bottom-left-radius: 2px;
             border: 1px solid var(--border-color);
+            border-bottom-left-radius: 2px;
         }
 
         .system {
             align-self: center;
             background: none;
             color: #64748b;
-            font-size: 0.8rem;
+            font-size: 0.77rem;
             font-style: italic;
-            padding: 4px 8px;
+            padding: 2px 8px;
             max-width: 100%;
             text-align: center;
         }
 
         .input-panel {
-            padding: 12px 16px;
+            padding: 10px 14px;
             border-top: 1px solid var(--border-color);
             display: flex;
             gap: 8px;
             background: #fafbfc;
+            flex-shrink: 0;
         }
 
-        .input-panel input {
-            flex: 1;
-            font-size: 0.85rem;
-        }
+        .input-panel input { flex: 1; }
     </style>
 </head>
 <body>
 
-    <div class="app-container">
-        <!-- Main Content Area with Dashboard -->
-        <div class="main-content">
-            <div class="dashboard-container">
-                <iframe src="https://www.arcgis.com/apps/dashboards/9992e26805234c23ba91104bc6eb554f" title="ArcGIS Dashboard"></iframe>
+<div class="app-container">
+    <!-- ArcGIS JS SDK MapView — replaces the static dashboard iframe -->
+    <div id="mapDiv"></div>
+
+    <!-- Chat sidebar -->
+    <div class="chat-panel">
+        <header>
+            <h1>Spatial AI Assistant</h1>
+            <p>Powered by Claude + ArcGIS Maps SDK</p>
+        </header>
+
+        <div class="setup-panel">
+            <div class="input-group">
+                <label for="api-key">Anthropic API Key</label>
+                <input type="password" id="api-key" placeholder="sk-ant-..." autocomplete="off">
             </div>
+            <div class="input-group">
+                <label for="render-url">Server URL</label>
+                <input type="text" id="render-url"
+                       placeholder="https://your-app.onrender.com"
+                       value="https://agol-mcp-proxy.onrender.com">
+            </div>
+            <button id="connect-btn" style="width:100%;">Connect</button>
         </div>
 
-        <!-- Right Sidebar - Chatbot -->
-        <div class="chat-panel">
-            <header>
-                <h1>🗺️ Spatial AI Assistant</h1>
-            </header>
-            
-            <div class="setup-panel">
-                <div class="input-group">
-                    <label for="api-key">Anthropic API Key</label>
-                    <input type="password" id="api-key" placeholder="sk-ant-..." autocomplete="off">
-                </div>
-                <div class="input-group">
-                    <label for="render-url">Render MCP Server URL</label>
-                    <input type="text" id="render-url" placeholder="https://your-app.onrender.com" value="https://agol-mcp-proxy.onrender.com">
-                </div>
-                <button id="connect-btn" style="width: 100%;">Connect to Server</button>
-            </div>
+        <div id="chat-history">
+            <div class="message system">Enter your API key and server URL, then click Connect.</div>
+        </div>
 
-            <div id="chat-history">
-                <div class="message system">Waiting for connection... Please enter your credentials and connect above.</div>
-            </div>
-            
-            <div class="input-panel">
-                <input type="text" id="user-input" placeholder="Ask about phosphorus, watersheds, crop belts..." disabled>
-                <button id="send-btn" disabled>Send</button>
-            </div>
+        <div class="input-panel">
+            <input type="text" id="user-input"
+                   placeholder="Ask about phosphorus, watersheds, crop belts..."
+                   disabled>
+            <button id="send-btn" disabled>Send</button>
         </div>
     </div>
+</div>
 
-    <script type="module" src="app.js"></script>
+<!-- ArcGIS Maps SDK for JavaScript (AMD loader — must load before app.js) -->
+<script src="https://js.arcgis.com/4.29/"></script>
+<!-- App logic -->
+<script src="app.js"></script>
+
 </body>
 </html>
