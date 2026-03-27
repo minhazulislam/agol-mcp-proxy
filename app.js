@@ -24,7 +24,7 @@ const PORTAL_URL = "https://asu.maps.arcgis.com";
  *
  * The redirect URI must include: <your-app-origin>/oauth-callback.html
  */
-const OAUTH_CLIENT_ID = "YOUR_OAUTH_CLIENT_ID"; // ← replace before deploying
+const OAUTH_CLIENT_ID = "sSGEaOtbBSAPN0Ht";
 
 // Point the SDK at the ASU portal
 esriConfig.portalUrl = PORTAL_URL;
