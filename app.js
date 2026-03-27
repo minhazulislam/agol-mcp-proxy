@@ -154,8 +154,12 @@ async function sendMessage(text) {
     });
 
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: res.statusText }));
-      throw new Error(err.error ?? res.statusText);
+      const body = await res.json().catch(() => null);
+      const msg = (typeof body?.error === "string" ? body.error : null)
+               ?? body?.detail
+               ?? res.statusText
+               ?? `HTTP ${res.status}`;
+      throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
     }
 
     const data = await res.json();
@@ -171,7 +175,8 @@ async function sendMessage(text) {
     }
 
   } catch (err) {
-    appendMessage("assistant", `Error: ${err.message}`);
+    const msg = (err instanceof Error) ? err.message : JSON.stringify(err);
+    appendMessage("assistant", `Error: ${msg}`);
     conversationHistory.pop();
   } finally {
     setTyping(false);
