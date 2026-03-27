@@ -34,7 +34,8 @@ const oauthInfo = new OAuthInfo({
   appId:            OAUTH_CLIENT_ID,
   portalUrl:        PORTAL_URL,
   popup:            true,
-  popupCallbackUrl: `${location.origin}/oauth-callback.html`,
+  // Resolves correctly regardless of subdirectory (e.g. GitHub Pages /agol-mcp-proxy/)
+  popupCallbackUrl: new URL("oauth-callback.html", location.href).href,
 });
 IdentityManager.registerOAuthInfos([oauthInfo]);
 
