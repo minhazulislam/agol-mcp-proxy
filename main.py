@@ -110,7 +110,8 @@ app.add_middleware(
 )
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
-MAX_QUERY_CHARS = 12_000  # ~3 k tokens — well under API limits
+MAX_QUERY_CHARS = 4_000   # keep tool results small
+MAX_HISTORY_MSGS = 6      # only last 3 user+assistant pairs sent to Claude
 
 def run_arcgis_query(
     layer_name: str,
@@ -186,8 +187,10 @@ async def chat(request: Request):
             status_code=503,
         )
 
-    body     = await request.json()
-    messages = body.get("messages", [])
+    body = await request.json()
+    # Trim history to last MAX_HISTORY_MSGS messages to stay under rate limits.
+    # The system prompt provides enough context; old turns are not needed.
+    messages = body.get("messages", [])[-MAX_HISTORY_MSGS:]
 
     headers = {
         "Content-Type":      "application/json",
@@ -200,7 +203,7 @@ async def chat(request: Request):
     for _ in range(10):
         payload = {
             "model":      "claude-sonnet-4-6",
-            "max_tokens": 4096,
+            "max_tokens": 1024,
             "system":     SYSTEM_PROMPT,
             "tools":      CLAUDE_TOOLS,
             "messages":   messages,
