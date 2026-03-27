@@ -1,16 +1,14 @@
 import os
+import json
 import requests
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
-# ── Gemini API key from Render environment variable ──────────────────────────
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_MODEL   = "gemini-3.1-flash-lite-preview"
-GEMINI_URL     = (
-    f"https://generativelanguage.googleapis.com/v1beta/models"
-    f"/{GEMINI_MODEL}:generateContent"
-)
+# ── Groq API key from Render environment variable ────────────────────────────
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+GROQ_MODEL   = "llama-3.3-70b-versatile"
+GROQ_URL     = "https://api.groq.com/openai/v1/chat/completions"
 
 # ── ArcGIS feature service endpoints ────────────────────────────────────────
 AGOL_LAYERS = {
@@ -44,31 +42,30 @@ IMPORTANT — keep queries small to avoid token limits:
 - Use a specific where_clause to filter rows; avoid returning thousands of records.
 """
 
-# ── Gemini function declarations ─────────────────────────────────────────────
-GEMINI_TOOLS = [
+# ── Groq tool definitions (OpenAI-compatible format) ─────────────────────────
+GROQ_TOOLS = [
     {
-        "functionDeclarations": [
-            {
-                "name": "query_arcgis",
-                "description": (
-                    "Query an ArcGIS Feature Layer to retrieve attribute data. "
-                    "Use return_count_only=true for 'how many' questions (returns just a count, no records). "
-                    "Use a specific where_clause and limited out_fields to keep responses concise. "
-                    f"Valid layer_name values: {', '.join(AGOL_LAYERS.keys())}."
-                ),
-                "parameters": {
-                    "type": "OBJECT",
-                    "properties": {
-                        "layer_name":        {"type": "STRING", "description": "Name of the layer to query."},
-                        "where_clause":      {"type": "STRING", "description": "SQL WHERE clause, default '1=1'"},
-                        "out_fields":        {"type": "STRING", "description": "Comma-separated field names. Use only the fields you need."},
-                        "return_count_only": {"type": "BOOLEAN", "description": "Return only the feature count — use for 'how many' questions"},
-                        "max_records":       {"type": "INTEGER", "description": "Max records to return (default 50, max 200)"},
-                    },
-                    "required": ["layer_name"],
+        "type": "function",
+        "function": {
+            "name": "query_arcgis",
+            "description": (
+                "Query an ArcGIS Feature Layer to retrieve attribute data. "
+                "Use return_count_only=true for 'how many' questions (returns just a count, no records). "
+                "Use a specific where_clause and limited out_fields to keep responses concise. "
+                f"Valid layer_name values: {', '.join(AGOL_LAYERS.keys())}."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "layer_name":        {"type": "string", "description": "Name of the layer to query."},
+                    "where_clause":      {"type": "string", "description": "SQL WHERE clause, default '1=1'"},
+                    "out_fields":        {"type": "string", "description": "Comma-separated field names. Use only the fields you need."},
+                    "return_count_only": {"type": "boolean", "description": "Return only the feature count — use for 'how many' questions"},
+                    "max_records":       {"type": "integer", "description": "Max records to return (default 50, max 200)"},
                 },
-            }
-        ]
+                "required": ["layer_name"],
+            },
+        },
     }
 ]
 
@@ -84,7 +81,7 @@ app.add_middleware(
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 MAX_QUERY_CHARS  = 4_000  # keep tool results small
-MAX_HISTORY_MSGS = 6      # only last 3 user+model pairs sent to Gemini
+MAX_HISTORY_MSGS = 6      # only last 3 user+assistant pairs sent to Groq
 
 
 def run_arcgis_query(
@@ -115,49 +112,42 @@ def run_arcgis_query(
         return f"Request error: {e}"
 
 
-def to_gemini_contents(messages: list) -> list:
-    """Convert frontend {role, content} messages to Gemini contents format."""
-    contents = []
-    for msg in messages:
-        role = "model" if msg["role"] == "assistant" else "user"
-        contents.append({"role": role, "parts": [{"text": msg["content"]}]})
-    return contents
-
-
 # ── Endpoints ────────────────────────────────────────────────────────────────
 @app.get("/health")
 async def health():
-    return {"status": "ok", "ai_ready": bool(GEMINI_API_KEY)}
+    return {"status": "ok", "ai_ready": bool(GROQ_API_KEY)}
 
 
 @app.post("/chat")
 async def chat(request: Request):
-    if not GEMINI_API_KEY:
+    if not GROQ_API_KEY:
         return JSONResponse(
-            {"error": "GEMINI_API_KEY is not set on the server. Add it in your Render environment variables."},
+            {"error": "GROQ_API_KEY is not set on the server. Add it in your Render environment variables."},
             status_code=503,
         )
 
     body = await request.json()
-    messages = body.get("messages", [])[-MAX_HISTORY_MSGS:]
+    history = body.get("messages", [])[-MAX_HISTORY_MSGS:]
 
-    # Build Gemini-format contents list (extended during agentic loop)
-    contents = to_gemini_contents(messages)
+    # Build OpenAI-compatible messages list with system prompt prepended
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    for msg in history:
+        messages.append({"role": msg["role"], "content": msg["content"]})
+
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type":  "application/json",
+    }
 
     for _ in range(10):
         payload = {
-            "contents":          contents,
-            "tools":             GEMINI_TOOLS,
-            "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
-            "generationConfig":  {"maxOutputTokens": 1024},
+            "model":      GROQ_MODEL,
+            "messages":   messages,
+            "tools":      GROQ_TOOLS,
+            "max_tokens": 1024,
         }
 
-        resp = requests.post(
-            GEMINI_URL,
-            json=payload,
-            params={"key": GEMINI_API_KEY},
-            timeout=60,
-        )
+        resp = requests.post(GROQ_URL, json=payload, headers=headers, timeout=60)
         if not resp.ok:
             try:
                 err_msg = resp.json().get("error", {}).get("message") or resp.text
@@ -165,26 +155,26 @@ async def chat(request: Request):
                 err_msg = resp.text
             return JSONResponse({"error": err_msg}, status_code=resp.status_code)
 
-        data      = resp.json()
-        candidate = data.get("candidates", [{}])[0]
-        parts     = candidate.get("content", {}).get("parts", [])
+        data         = resp.json()
+        choice       = data["choices"][0]
+        message      = choice["message"]
+        finish_reason = choice.get("finish_reason")
+        tool_calls   = message.get("tool_calls") or []
 
-        # Separate text parts from function-call parts
-        fn_calls   = [p["functionCall"] for p in parts if "functionCall" in p]
-        text_parts = [p.get("text", "") for p in parts if "text" in p]
+        if not tool_calls:
+            return {"reply": message.get("content", "").strip()}
 
-        if not fn_calls:
-            # No tool calls — return the text answer
-            return {"reply": " ".join(text_parts).strip()}
+        # Add assistant message (with tool calls) to history
+        messages.append(message)
 
-        # Add model turn (with function calls) to contents
-        contents.append({"role": "model", "parts": parts})
-
-        # Execute each function call and collect responses
-        fn_responses = []
-        for fc in fn_calls:
-            name = fc["name"]
-            args = fc.get("args", {})
+        # Execute each tool call and append results
+        for tc in tool_calls:
+            fn   = tc["function"]
+            name = fn["name"]
+            try:
+                args = json.loads(fn["arguments"])
+            except Exception:
+                args = {}
             print(f"[TOOL] {name} {args}")
 
             if name == "query_arcgis":
@@ -198,15 +188,11 @@ async def chat(request: Request):
             else:
                 result = f"Unknown tool: {name}"
 
-            fn_responses.append({
-                "functionResponse": {
-                    "name": name,
-                    "response": {"result": result},
-                }
+            messages.append({
+                "role":         "tool",
+                "tool_call_id": tc["id"],
+                "content":      result,
             })
-
-        # Add function results as a user turn
-        contents.append({"role": "user", "parts": fn_responses})
 
     return {"reply": "Max tool iterations reached."}
 
