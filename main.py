@@ -4,8 +4,13 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
-# ── Claude API key from Render environment variable ─────────────────────────
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+# ── Gemini API key from Render environment variable ──────────────────────────
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GEMINI_MODEL   = "gemini-2.0-flash"
+GEMINI_URL     = (
+    f"https://generativelanguage.googleapis.com/v1beta/models"
+    f"/{GEMINI_MODEL}:generateContent"
+)
 
 # ── ArcGIS feature service endpoints ────────────────────────────────────────
 AGOL_LAYERS = {
@@ -39,27 +44,32 @@ IMPORTANT — keep queries small to avoid token limits:
 - Use a specific where_clause to filter rows; avoid returning thousands of records.
 """
 
-CLAUDE_TOOLS = [
+# ── Gemini function declarations ─────────────────────────────────────────────
+GEMINI_TOOLS = [
     {
-        "name": "query_arcgis",
-        "description": (
-            "Query an ArcGIS Feature Layer to retrieve attribute data. "
-            "Use return_count_only=true for 'how many' questions (returns just a count, no records). "
-            "Use a specific where_clause and limited out_fields to keep responses concise. "
-            f"Valid layer_name values: {', '.join(AGOL_LAYERS.keys())}."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "layer_name":        {"type": "string"},
-                "where_clause":      {"type": "string", "description": "SQL WHERE clause, default '1=1'"},
-                "out_fields":        {"type": "string", "description": "Comma-separated field names. Use only the fields you need."},
-                "return_count_only": {"type": "boolean", "description": "Return only the feature count — use for 'how many' questions"},
-                "max_records":       {"type": "integer", "description": "Max records to return (default 50, max 200)"},
-            },
-            "required": ["layer_name"],
-        },
-    },
+        "functionDeclarations": [
+            {
+                "name": "query_arcgis",
+                "description": (
+                    "Query an ArcGIS Feature Layer to retrieve attribute data. "
+                    "Use return_count_only=true for 'how many' questions (returns just a count, no records). "
+                    "Use a specific where_clause and limited out_fields to keep responses concise. "
+                    f"Valid layer_name values: {', '.join(AGOL_LAYERS.keys())}."
+                ),
+                "parameters": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "layer_name":        {"type": "STRING", "description": "Name of the layer to query."},
+                        "where_clause":      {"type": "STRING", "description": "SQL WHERE clause, default '1=1'"},
+                        "out_fields":        {"type": "STRING", "description": "Comma-separated field names. Use only the fields you need."},
+                        "return_count_only": {"type": "BOOLEAN", "description": "Return only the feature count — use for 'how many' questions"},
+                        "max_records":       {"type": "INTEGER", "description": "Max records to return (default 50, max 200)"},
+                    },
+                    "required": ["layer_name"],
+                },
+            }
+        ]
+    }
 ]
 
 app = FastAPI()
@@ -73,8 +83,9 @@ app.add_middleware(
 )
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
-MAX_QUERY_CHARS = 4_000   # keep tool results small
-MAX_HISTORY_MSGS = 6      # only last 3 user+assistant pairs sent to Claude
+MAX_QUERY_CHARS  = 4_000  # keep tool results small
+MAX_HISTORY_MSGS = 6      # only last 3 user+model pairs sent to Gemini
+
 
 def run_arcgis_query(
     layer_name: str,
@@ -104,84 +115,98 @@ def run_arcgis_query(
         return f"Request error: {e}"
 
 
+def to_gemini_contents(messages: list) -> list:
+    """Convert frontend {role, content} messages to Gemini contents format."""
+    contents = []
+    for msg in messages:
+        role = "model" if msg["role"] == "assistant" else "user"
+        contents.append({"role": role, "parts": [{"text": msg["content"]}]})
+    return contents
+
+
 # ── Endpoints ────────────────────────────────────────────────────────────────
 @app.get("/health")
 async def health():
-    return {"status": "ok", "ai_ready": bool(ANTHROPIC_API_KEY)}
+    return {"status": "ok", "ai_ready": bool(GEMINI_API_KEY)}
 
 
 @app.post("/chat")
 async def chat(request: Request):
-    if not ANTHROPIC_API_KEY:
+    if not GEMINI_API_KEY:
         return JSONResponse(
-            {"error": "ANTHROPIC_API_KEY is not set on the server. Add it in your Render environment variables."},
+            {"error": "GEMINI_API_KEY is not set on the server. Add it in your Render environment variables."},
             status_code=503,
         )
 
     body = await request.json()
-    # Trim history to last MAX_HISTORY_MSGS messages to stay under rate limits.
-    # The system prompt provides enough context; old turns are not needed.
     messages = body.get("messages", [])[-MAX_HISTORY_MSGS:]
 
-    headers = {
-        "Content-Type":      "application/json",
-        "x-api-key":         ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
-    }
+    # Build Gemini-format contents list (extended during agentic loop)
+    contents = to_gemini_contents(messages)
 
     for _ in range(10):
         payload = {
-            "model":      "claude-sonnet-4-6",
-            "max_tokens": 1024,
-            "system":     SYSTEM_PROMPT,
-            "tools":      CLAUDE_TOOLS,
-            "messages":   messages,
+            "contents":          contents,
+            "tools":             GEMINI_TOOLS,
+            "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+            "generationConfig":  {"maxOutputTokens": 1024},
         }
 
         resp = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            json=payload, headers=headers, timeout=60,
+            GEMINI_URL,
+            json=payload,
+            params={"key": GEMINI_API_KEY},
+            timeout=60,
         )
         if not resp.ok:
             try:
-                err_body = resp.json()
-                err_msg = err_body.get("error", {}).get("message") or resp.text
+                err_msg = resp.json().get("error", {}).get("message") or resp.text
             except Exception:
                 err_msg = resp.text
             return JSONResponse({"error": err_msg}, status_code=resp.status_code)
 
-        data        = resp.json()
-        stop_reason = data.get("stop_reason")
+        data      = resp.json()
+        candidate = data.get("candidates", [{}])[0]
+        parts     = candidate.get("content", {}).get("parts", [])
 
-        if stop_reason != "tool_use":
-            final = next((b["text"] for b in data["content"] if b["type"] == "text"), "")
-            return {"reply": final}
+        # Separate text parts from function-call parts
+        fn_calls   = [p["functionCall"] for p in parts if "functionCall" in p]
+        text_parts = [p.get("text", "") for p in parts if "text" in p]
 
-        tool_use_blocks = [b for b in data["content"] if b["type"] == "tool_use"]
-        messages.append({"role": "assistant", "content": data["content"]})
+        if not fn_calls:
+            # No tool calls — return the text answer
+            return {"reply": " ".join(text_parts).strip()}
 
-        tool_results = []
-        for tu in tool_use_blocks:
-            inp  = tu["input"]
-            name = tu["name"]
-            print(f"[TOOL] {name} {inp}")
+        # Add model turn (with function calls) to contents
+        contents.append({"role": "model", "parts": parts})
+
+        # Execute each function call and collect responses
+        fn_responses = []
+        for fc in fn_calls:
+            name = fc["name"]
+            args = fc.get("args", {})
+            print(f"[TOOL] {name} {args}")
 
             if name == "query_arcgis":
-                result_text = run_arcgis_query(
-                    inp.get("layer_name"),
-                    inp.get("where_clause", "1=1"),
-                    inp.get("out_fields", "*"),
-                    return_count_only=inp.get("return_count_only", False),
-                    max_records=min(int(inp.get("max_records", 50)), 200),
+                result = run_arcgis_query(
+                    args.get("layer_name"),
+                    args.get("where_clause", "1=1"),
+                    args.get("out_fields", "*"),
+                    return_count_only=args.get("return_count_only", False),
+                    max_records=min(int(args.get("max_records", 50)), 200),
                 )
             else:
-                result_text = f"Unknown tool: {name}"
+                result = f"Unknown tool: {name}"
 
-            tool_results.append({
-                "type": "tool_result", "tool_use_id": tu["id"], "content": result_text,
+            fn_responses.append({
+                "functionResponse": {
+                    "name": name,
+                    "response": {"result": result},
+                }
             })
 
-        messages.append({"role": "user", "content": tool_results})
+        # Add function results as a user turn
+        contents.append({"role": "user", "parts": fn_responses})
 
     return {"reply": "Max tool iterations reached."}
 
