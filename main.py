@@ -21,28 +21,21 @@ AGOL_LAYERS = {
     "winter_wheat_belt":   "https://services3.arcgis.com/0OPQIK59PJJqLK0A/arcgis/rest/services/Winter_Wheat_Belt/FeatureServer/0/query",
 }
 
-SYSTEM_PROMPT = f"""You are a spatial AI assistant for an interactive 4-panel phosphorus mapping dashboard.
+SYSTEM_PROMPT = f"""You are a spatial AI assistant for a US phosphorus mapping dashboard.
 
-The dashboard shows 4 synchronized map panels:
-- Top-left:     USA WWTPs Treatment Design Capacity overlaid on Agricultural P Fertilizer Consumption
-                (layers: wwtp_phosphorus, county_p_consumption)
-- Top-right:    Largest 200 WWTPs Sewage Sludge Phosphorus overlaid on US Agricultural Belts
-                (layers: largest_200, corn_belt, cotton_belt, soybean_belt, spring_wheat_belt, winter_wheat_belt)
-- Bottom-left:  P Use Ratio (Individual County)
-                (layer: p_use_ratio_ind)
-- Bottom-right: P Use Ratio (Neighborhood County)
-                (layer: p_use_ratio_neighbor)
+The dashboard displays an embedded ArcGIS Online dashboard covering:
+- USA WWTPs treatment design capacity and agricultural P fertilizer consumption
+- Largest 200 WWTPs sewage sludge phosphorus overlaid on US agricultural belts
+- P Use Ratio by individual county and by neighborhood county
 
-Available layers: {', '.join(AGOL_LAYERS.keys())}
+Available data layers you can query: {', '.join(AGOL_LAYERS.keys())}
 
-When a user asks about a place or region, use zoom_to_location to move all maps there.
-When asked about specific facilities or counties, use highlight_features to highlight them.
 Use query_arcgis to retrieve data and give precise, quantitative answers.
-Chain multiple tools in a single turn when needed (e.g. zoom + highlight + query).
+You cannot control the map view — focus on answering data questions clearly.
 
 IMPORTANT — keep queries small to avoid token limits:
 - For "how many" questions always set return_count_only=true.
-- Always specify only the fields you need in out_fields (never use * unless necessary).
+- Specify only the fields you need in out_fields (never use * unless necessary).
 - Use a specific where_clause to filter rows; avoid returning thousands of records.
 """
 
@@ -60,42 +53,12 @@ CLAUDE_TOOLS = [
             "properties": {
                 "layer_name":        {"type": "string"},
                 "where_clause":      {"type": "string", "description": "SQL WHERE clause, default '1=1'"},
-                "out_fields":        {"type": "string", "description": "Comma-separated field names, default '*'. Use only the fields you need."},
+                "out_fields":        {"type": "string", "description": "Comma-separated field names. Use only the fields you need."},
                 "return_count_only": {"type": "boolean", "description": "Return only the feature count — use for 'how many' questions"},
                 "max_records":       {"type": "integer", "description": "Max records to return (default 50, max 200)"},
             },
             "required": ["layer_name"],
         },
-    },
-    {
-        "name": "zoom_to_location",
-        "description": "Zoom all 4 map panels to a named location or coordinates.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "place_name": {"type": "string", "description": "e.g. 'Iowa', 'Gulf Coast', 'Mississippi River Basin'"},
-                "longitude":  {"type": "number"},
-                "latitude":   {"type": "number"},
-                "zoom":       {"type": "integer", "description": "Zoom level 3–18, default 6"},
-            },
-        },
-    },
-    {
-        "name": "highlight_features",
-        "description": "Highlight features matching a SQL filter on the relevant map panel.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "layer_name":   {"type": "string"},
-                "where_clause": {"type": "string"},
-            },
-            "required": ["layer_name", "where_clause"],
-        },
-    },
-    {
-        "name": "clear_map",
-        "description": "Remove all highlights from the maps.",
-        "input_schema": {"type": "object", "properties": {}},
     },
 ]
 
@@ -141,38 +104,6 @@ def run_arcgis_query(
         return f"Request error: {e}"
 
 
-def get_object_ids(layer_name: str, where_clause: str = "1=1") -> list:
-    if layer_name not in AGOL_LAYERS:
-        return []
-    try:
-        resp = requests.get(
-            AGOL_LAYERS[layer_name],
-            params={"where": where_clause, "returnIdsOnly": "true", "f": "json"},
-            timeout=30,
-        )
-        return resp.json().get("objectIds") or []
-    except Exception:
-        return []
-
-
-def geocode_place(place_name: str):
-    url = "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates"
-    try:
-        resp = requests.get(
-            url,
-            params={"singleLine": place_name, "f": "json", "maxLocations": 1,
-                    "outFields": "*", "sourceCountry": "USA"},
-            timeout=15,
-        )
-        candidates = resp.json().get("candidates", [])
-        if candidates:
-            c = candidates[0]
-            return c.get("location"), c.get("extent")
-    except Exception:
-        pass
-    return None, None
-
-
 # ── Endpoints ────────────────────────────────────────────────────────────────
 @app.get("/health")
 async def health():
@@ -197,8 +128,6 @@ async def chat(request: Request):
         "x-api-key":         ANTHROPIC_API_KEY,
         "anthropic-version": "2023-06-01",
     }
-
-    pending_actions = []
 
     for _ in range(10):
         payload = {
@@ -226,7 +155,7 @@ async def chat(request: Request):
 
         if stop_reason != "tool_use":
             final = next((b["text"] for b in data["content"] if b["type"] == "text"), "")
-            return {"reply": final, "actions": pending_actions}
+            return {"reply": final}
 
         tool_use_blocks = [b for b in data["content"] if b["type"] == "tool_use"]
         messages.append({"role": "assistant", "content": data["content"]})
@@ -245,48 +174,6 @@ async def chat(request: Request):
                     return_count_only=inp.get("return_count_only", False),
                     max_records=min(int(inp.get("max_records", 50)), 200),
                 )
-
-            elif name == "zoom_to_location":
-                place = inp.get("place_name")
-                if place and not inp.get("longitude"):
-                    loc, ext = geocode_place(place)
-                    if ext and all(k in ext for k in ("xmin", "ymin", "xmax", "ymax")):
-                        pending_actions.append({
-                            "type": "zoom_extent",
-                            "xmin": ext["xmin"], "ymin": ext["ymin"],
-                            "xmax": ext["xmax"], "ymax": ext["ymax"],
-                        })
-                    elif loc:
-                        pending_actions.append({
-                            "type": "zoom", "longitude": loc["x"],
-                            "latitude": loc["y"], "zoom": inp.get("zoom", 7),
-                        })
-                    result_text = f"Zoomed to {place}"
-                elif inp.get("longitude") is not None:
-                    pending_actions.append({
-                        "type": "zoom", "longitude": inp["longitude"],
-                        "latitude": inp["latitude"], "zoom": inp.get("zoom", 6),
-                    })
-                    result_text = "Zoomed to coordinates"
-                else:
-                    result_text = "No location provided"
-
-            elif name == "highlight_features":
-                oids = get_object_ids(inp.get("layer_name", ""), inp.get("where_clause", "1=1"))
-                if oids:
-                    pending_actions.append({
-                        "type": "highlight",
-                        "layer_name": inp["layer_name"],
-                        "objectIds":  oids,
-                    })
-                    result_text = f"Highlighting {len(oids)} features in {inp['layer_name']}"
-                else:
-                    result_text = f"No features matched: {inp.get('where_clause')}"
-
-            elif name == "clear_map":
-                pending_actions.append({"type": "clear"})
-                result_text = "Map cleared"
-
             else:
                 result_text = f"Unknown tool: {name}"
 
@@ -296,7 +183,7 @@ async def chat(request: Request):
 
         messages.append({"role": "user", "content": tool_results})
 
-    return {"reply": "Max tool iterations reached.", "actions": pending_actions}
+    return {"reply": "Max tool iterations reached."}
 
 
 @app.get("/")

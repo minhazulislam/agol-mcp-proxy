@@ -5,21 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>US National WW Phosphorus Mapping</title>
 
-  <!-- ArcGIS Map Components 5.0 -->
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@arcgis/map-components@5.0.14/dist/arcgis-map-components/arcgis-map-components.css">
-
-  <!--
-    Import map: resolves bare "@arcgis/core/..." specifiers used by map-components
-    to the ArcGIS 5.0 CDN.
-  -->
-  <script type="importmap">
-  {
-    "imports": {
-      "@arcgis/core/": "https://js.arcgis.com/5.0/@arcgis/core/"
-    }
-  }
-  </script>
-
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     html, body { height: 100%; overflow: hidden; font-family: "Avenir Next", Avenir, Helvetica, Arial, sans-serif; }
@@ -72,44 +57,11 @@
       height: calc(100vh - 44px);
     }
 
-    /* ── 2×2 map grid ──────────────────────────────────────────────────────── */
-    .map-grid {
+    /* ── ArcGIS Dashboard iframe ────────────────────────────────────────────── */
+    .dashboard-frame {
       flex: 1;
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      grid-template-rows: 1fr 1fr;
-      gap: 2px;
-      background: #b0b0b0;
+      border: none;
       min-width: 0;
-    }
-
-    .map-cell {
-      position: relative;
-      overflow: hidden;
-      background: white;
-    }
-
-    .map-label {
-      position: absolute;
-      top: 0;
-      left: 0;
-      right: 0;
-      background: rgba(255, 255, 255, 0.88);
-      padding: 4px 8px;
-      font-size: 0.7rem;
-      font-weight: 500;
-      z-index: 10;
-      user-select: none;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      border-bottom: 1px solid rgba(0,0,0,0.08);
-    }
-
-    arcgis-map {
-      display: block;
-      width: 100%;
-      height: 100%;
     }
 
     /* ── AI Chat sidebar ──────────────────────────────────────────────────── */
@@ -305,42 +257,13 @@
 <!-- ── Main body ───────────────────────────────────────────────────────────── -->
 <div class="app-body">
 
-  <!-- 2×2 map grid ───────────────────────────────────────────────────────── -->
-  <div class="map-grid">
-
-    <!-- Top-left: WWTP capacity + P fertilizer consumption -->
-    <div class="map-cell" data-map-id="map-tl">
-      <div class="map-label">
-        USA WWTPs Treatment Design Capacity Overlaid on Agricultural P Fertilizer Consumption
-      </div>
-      <arcgis-map id="map-tl" item-id="9bf5ad31c63e4eaa9156c9d9e21c47d7"></arcgis-map>
-    </div>
-
-    <!-- Top-right: Largest 200 + agricultural belts -->
-    <div class="map-cell" data-map-id="map-tr">
-      <div class="map-label">
-        Largest 200 WWTPs Sewage Sludge Phosphorus Overlaid on US Agricultural Belts
-      </div>
-      <arcgis-map id="map-tr" item-id="90b301b54dfa430dba961eeb5e8529de"></arcgis-map>
-    </div>
-
-    <!-- Bottom-left: P Use Ratio Individual -->
-    <div class="map-cell" data-map-id="map-bl">
-      <div class="map-label">
-        P Use Ratio (Individual County)
-      </div>
-      <arcgis-map id="map-bl" item-id="6fa5d1dc8aca4d9096835e66b0c301ca"></arcgis-map>
-    </div>
-
-    <!-- Bottom-right: P Use Ratio Neighborhood -->
-    <div class="map-cell" data-map-id="map-br">
-      <div class="map-label">
-        P Use Ratio (Neighborhood County)
-      </div>
-      <arcgis-map id="map-br" item-id="505d78215f1f46cb9ff49a2c94212415"></arcgis-map>
-    </div>
-
-  </div>
+  <!-- ArcGIS Online Dashboard ────────────────────────────────────────────── -->
+  <iframe
+    class="dashboard-frame"
+    src="https://www.arcgis.com/apps/dashboards/9992e26805234c23ba91104bc6eb554f"
+    allowfullscreen
+    title="US National WW Phosphorus Dashboard"
+  ></iframe>
 
   <!-- AI Chat sidebar ──────────────────────────────────────────────────────── -->
   <div class="chat-panel">
@@ -383,12 +306,6 @@
 
 </div>
 
-<!--
-  Load order matters:
-  1. Map Components (provides <arcgis-map>)
-  2. App logic (chat + map control)
--->
-<script type="module" src="https://cdn.jsdelivr.net/npm/@arcgis/map-components@5.0.14/dist/cdn/index.js"></script>
 <script type="module" src="app.js"></script>
 
 </body>
