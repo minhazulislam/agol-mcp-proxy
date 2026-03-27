@@ -18,9 +18,7 @@ function appendMessage(role, text) {
   const div = document.createElement("div");
   div.className = `msg ${role === "user" ? "user" : role === "system-msg" ? "system-msg" : "assistant"}`;
   div.textContent = text;
-  if (role === "user") {
-    document.getElementById("suggestions").style.display = "none";
-  }
+
   messagesEl.appendChild(div);
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
@@ -91,16 +89,10 @@ inputEl.addEventListener("input", () => {
   inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + "px";
 });
 
-// ── Suggestion chips ──────────────────────────────────────────────────────────
-document.querySelectorAll(".suggestion-chip").forEach(chip => {
-  chip.addEventListener("click", () => sendMessage(chip.textContent.trim()));
-});
-
 // ── Clear conversation ────────────────────────────────────────────────────────
 document.getElementById("clear-btn").addEventListener("click", () => {
   conversationHistory = [];
   messagesEl.innerHTML = `<div class="msg assistant">I can help you explore phosphorus cycling and agricultural data. Ask me to query statistics, explain the data, or answer questions about facilities and counties.</div>`;
-  document.getElementById("suggestions").style.display = "";
 });
 
 // ── Health check on load ──────────────────────────────────────────────────────
