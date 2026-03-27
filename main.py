@@ -182,7 +182,12 @@ async def chat(request: Request):
             json=payload, headers=headers, timeout=60,
         )
         if not resp.ok:
-            return JSONResponse({"error": resp.json()}, status_code=resp.status_code)
+            try:
+                err_body = resp.json()
+                err_msg = err_body.get("error", {}).get("message") or resp.text
+            except Exception:
+                err_msg = resp.text
+            return JSONResponse({"error": err_msg}, status_code=resp.status_code)
 
         data        = resp.json()
         stop_reason = data.get("stop_reason")
