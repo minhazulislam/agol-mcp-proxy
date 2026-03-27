@@ -1,111 +1,229 @@
 /**
- * app.js — ArcGIS Maps SDK 5.0 + AI Components
+ * app.js — Claude AI-powered spatial assistant
  *
  * Responsibilities:
- *  1. Configure the ArcGIS portal URL (ASU ArcGIS Online)
- *  2. Register OAuth so sign-in goes to asu.maps.arcgis.com
- *  3. Manage the sign-in / sign-out header buttons
- *  4. Switch the arcgis-assistant's context when the user clicks a map label
+ *  1. Collect MapView references from all 4 <arcgis-map> panels
+ *  2. Send chat messages to the /chat backend (Claude API proxy)
+ *  3. Apply map actions returned by the backend (zoom, highlight, clear)
+ *  4. Render conversation messages in the chat sidebar
  */
 
-// These bare specifiers resolve via the <script type="importmap"> in index.html
-import esriConfig    from "@arcgis/core/config.js";
-import OAuthInfo     from "@arcgis/core/identity/OAuthInfo.js";
-import IdentityManager from "@arcgis/core/identity/IdentityManager.js";
+// ── Layer URL patterns for finding layers inside loaded web map items ────────
+const LAYER_URL_PATTERNS = {
+  wwtp_phosphorus:      "WWTP_Phosphorus",
+  largest_200:          "Largest_200",
+  county_p_consumption: "County_P_Fertilizer",
+  p_use_ratio_ind:      "County_P_Use_Ratio_Individual",
+  p_use_ratio_neighbor: "County_P_Use_Ratio_Neighborhood",
+  corn_belt:            "Corn_Belt",
+  cotton_belt:          "Cotton_Belt",
+  soybean_belt:         "Soybean_Belt",
+  spring_wheat_belt:    "Spring_Wheat_Belt",
+  winter_wheat_belt:    "Winter_Wheat_Belt",
+};
 
-// ── Configuration ──────────────────────────────────────────────────────────────
-const PORTAL_URL = "https://asu.maps.arcgis.com";
+// ── Which map panels contain each layer ─────────────────────────────────────
+const LAYER_TO_MAPS = {
+  wwtp_phosphorus:      ["map-tl"],
+  county_p_consumption: ["map-tl"],
+  largest_200:          ["map-tr"],
+  corn_belt:            ["map-tr"],
+  cotton_belt:          ["map-tr"],
+  soybean_belt:         ["map-tr"],
+  spring_wheat_belt:    ["map-tr"],
+  winter_wheat_belt:    ["map-tr"],
+  p_use_ratio_ind:      ["map-bl"],
+  p_use_ratio_neighbor: ["map-br"],
+};
 
-/**
- * OAuth Client ID registered for this application.
- * Register your app at https://asu.maps.arcgis.com/home/content.html
- * (Content → My Content → New Item → Application → Register) or at
- * https://developers.arcgis.com/
- *
- * The redirect URI must include: <your-app-origin>/oauth-callback.html
- */
-const OAUTH_CLIENT_ID = "sSGEaOtbBSAPN0Ht";
+// ── Map panel IDs ────────────────────────────────────────────────────────────
+const MAP_IDS = ["map-tl", "map-tr", "map-bl", "map-br"];
 
-// Point the SDK at the ASU portal
-esriConfig.portalUrl = PORTAL_URL;
+// ── State ────────────────────────────────────────────────────────────────────
+const mapViews = {};            // mapId → MapView
+const activeHighlights = [];   // highlight handles to clear on "clear"
+let conversationHistory = [];  // multi-turn messages array for /chat
 
-// ── OAuth registration ─────────────────────────────────────────────────────────
-const oauthInfo = new OAuthInfo({
-  appId:            OAUTH_CLIENT_ID,
-  portalUrl:        PORTAL_URL,
-  popup:            true,
-  // Resolves correctly regardless of subdirectory (e.g. GitHub Pages /agol-mcp-proxy/)
-  popupCallbackUrl: new URL("oauth-callback.html", location.href).href,
+// ── Collect MapView references from web component events ─────────────────────
+MAP_IDS.forEach(id => {
+  const el = document.getElementById(id);
+  if (!el) return;
+
+  el.addEventListener("arcgisViewReadyChange", (evt) => {
+    const view = evt.detail?.view ?? evt.target?.view;
+    if (view) {
+      mapViews[id] = view;
+      console.log(`[Map] ${id} ready`);
+    }
+  });
 });
-IdentityManager.registerOAuthInfos([oauthInfo]);
 
-// ── Auth UI ────────────────────────────────────────────────────────────────────
-const signInBtn  = document.getElementById("sign-in-btn");
-const signOutBtn = document.getElementById("sign-out-btn");
-const userNameEl = document.getElementById("user-name");
+// ── Apply actions returned by the backend ─────────────────────────────────────
+async function applyMapActions(actions) {
+  if (!actions || actions.length === 0) return;
 
-async function refreshAuthState() {
-  try {
-    const cred = await IdentityManager.checkSignInStatus(`${PORTAL_URL}/sharing/rest`);
-    signInBtn.hidden  = true;
-    signOutBtn.hidden = false;
-    userNameEl.textContent = cred.userId;
-  } catch {
-    signInBtn.hidden  = false;
-    signOutBtn.hidden = true;
-    userNameEl.textContent = "";
+  for (const action of actions) {
+    if (action.type === "zoom") {
+      const { longitude, latitude, zoom = 7 } = action;
+      for (const view of Object.values(mapViews)) {
+        view.goTo({ center: [longitude, latitude], zoom }).catch(() => {});
+      }
+
+    } else if (action.type === "zoom_extent") {
+      const { xmin, ymin, xmax, ymax } = action;
+      for (const view of Object.values(mapViews)) {
+        const { default: Extent } = await import("@arcgis/core/geometry/Extent.js");
+        const extent = new Extent({ xmin, ymin, xmax, ymax, spatialReference: { wkid: 4326 } });
+        view.goTo(extent).catch(() => {});
+      }
+
+    } else if (action.type === "highlight") {
+      const { layer_name, objectIds } = action;
+      if (!objectIds || objectIds.length === 0) continue;
+
+      const urlPattern = LAYER_URL_PATTERNS[layer_name];
+      if (!urlPattern) continue;
+
+      const targetMapIds = LAYER_TO_MAPS[layer_name] ?? MAP_IDS;
+      for (const mapId of targetMapIds) {
+        const view = mapViews[mapId];
+        if (!view) continue;
+
+        const layer = view.map.allLayers.find(
+          l => l.url && l.url.includes(urlPattern)
+        );
+        if (!layer) continue;
+
+        try {
+          const layerView = await view.whenLayerView(layer);
+          const handle = layerView.highlight(objectIds);
+          activeHighlights.push(handle);
+        } catch (err) {
+          console.warn(`[Highlight] ${layer_name}:`, err);
+        }
+      }
+
+    } else if (action.type === "clear") {
+      activeHighlights.forEach(h => h.remove());
+      activeHighlights.length = 0;
+    }
   }
 }
 
-signInBtn.addEventListener("click", async () => {
+// ── Chat UI helpers ───────────────────────────────────────────────────────────
+const messagesEl = document.getElementById("chat-messages");
+const typingEl   = document.getElementById("typing");
+const inputEl    = document.getElementById("chat-input");
+const sendBtn    = document.getElementById("send-btn");
+
+function appendMessage(role, text) {
+  const div = document.createElement("div");
+  div.className = `msg ${role === "user" ? "user" : role === "system-msg" ? "system-msg" : "assistant"}`;
+  div.textContent = text;
+  if (role === "user") {
+    document.getElementById("suggestions").style.display = "none";
+  }
+  messagesEl.appendChild(div);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function setTyping(visible) {
+  typingEl.classList.toggle("visible", visible);
+  sendBtn.disabled = visible;
+  inputEl.disabled = visible;
+  if (visible) messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+// ── Send a message ────────────────────────────────────────────────────────────
+async function sendMessage(text) {
+  text = text.trim();
+  if (!text) return;
+
+  appendMessage("user", text);
+  inputEl.value = "";
+  inputEl.style.height = "auto";
+  setTyping(true);
+
+  conversationHistory.push({ role: "user", content: text });
+
   try {
-    const cred = await IdentityManager.getCredential(`${PORTAL_URL}/sharing/rest`);
-    signInBtn.hidden  = true;
-    signOutBtn.hidden = false;
-    userNameEl.textContent = cred.userId;
+    const res = await fetch("/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: conversationHistory }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(err.error ?? res.statusText);
+    }
+
+    const data = await res.json();
+    const reply = data.reply ?? "";
+
+    conversationHistory.push({ role: "assistant", content: reply });
+    appendMessage("assistant", reply);
+
+    if (data.actions?.length) {
+      applyMapActions(data.actions);
+      const n = data.actions.length;
+      appendMessage("system-msg", `↳ Applied ${n} map action${n > 1 ? "s" : ""}`);
+    }
+
   } catch (err) {
-    console.error("ArcGIS sign-in error:", err);
+    appendMessage("assistant", `Error: ${err.message}`);
+    conversationHistory.pop();
+  } finally {
+    setTyping(false);
+    inputEl.focus();
+  }
+}
+
+// ── Input event listeners ─────────────────────────────────────────────────────
+sendBtn.addEventListener("click", () => sendMessage(inputEl.value));
+
+inputEl.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage(inputEl.value);
   }
 });
 
-signOutBtn.addEventListener("click", () => {
-  IdentityManager.destroyCredentials();
-  window.location.reload();
+inputEl.addEventListener("input", () => {
+  inputEl.style.height = "auto";
+  inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + "px";
 });
 
-// Check sign-in on load (restores session from a previous visit)
-refreshAuthState();
+// ── Suggestion chips ──────────────────────────────────────────────────────────
+document.querySelectorAll(".suggestion-chip").forEach(chip => {
+  chip.addEventListener("click", () => sendMessage(chip.textContent.trim()));
+});
 
-// ── AI Assistant suggested prompts ────────────────────────────────────────────
-// Set after the element is defined (custom elements may not be ready during
-// module evaluation, so we defer to DOMContentLoaded).
-document.addEventListener("DOMContentLoaded", () => {
-  const assistant = document.getElementById("assistant");
-  if (assistant) {
-    assistant.suggestedPrompts = [
-      "How many WWTPs are in Iowa?",
-      "What counties have the highest phosphorus fertilizer consumption?",
-      "Where is the corn belt region?",
-      "Filter to show only high phosphorus use counties",
-      "Find the top 10 facilities by phosphorus output",
-    ];
+// ── Clear conversation ────────────────────────────────────────────────────────
+document.getElementById("clear-btn").addEventListener("click", () => {
+  conversationHistory = [];
+  messagesEl.innerHTML = `<div class="msg assistant">I can help you explore phosphorus cycling and agricultural data. Ask me to navigate the maps, highlight facilities or counties, query statistics, or explain what you see.</div>`;
+  document.getElementById("suggestions").style.display = "";
+  activeHighlights.forEach(h => h.remove());
+  activeHighlights.length = 0;
+});
+
+// ── Health check on load ──────────────────────────────────────────────────────
+(async () => {
+  const dot  = document.getElementById("ai-dot");
+  const text = document.getElementById("ai-status-text");
+  try {
+    const res  = await fetch("/health");
+    const data = await res.json();
+    if (data.ai_ready) {
+      dot.className    = "ai-status-dot ready";
+      text.textContent = "AI ready";
+    } else {
+      dot.className    = "ai-status-dot error";
+      text.textContent = "AI key missing";
+    }
+  } catch {
+    dot.className    = "ai-status-dot error";
+    text.textContent = "Server unreachable";
   }
-});
-
-// ── Map-panel focus switching ──────────────────────────────────────────────────
-// Clicking a map's label (the white bar at the top of each panel) switches
-// the arcgis-assistant to interact with that map's data and layers.
-document.querySelectorAll(".map-cell .map-label").forEach(label => {
-  label.addEventListener("click", () => {
-    const cell  = label.closest(".map-cell");
-    const mapId = cell.dataset.mapId;
-
-    // Update assistant context
-    const assistant = document.getElementById("assistant");
-    if (assistant) assistant.referenceElement = `#${mapId}`;
-
-    // Update active visual state
-    document.querySelectorAll(".map-cell").forEach(c => c.classList.remove("active"));
-    cell.classList.add("active");
-  });
-});
+})();

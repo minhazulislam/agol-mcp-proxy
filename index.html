@@ -5,16 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>US National WW Phosphorus Mapping</title>
 
-  <!-- Esri Calcite UI design system -->
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@esri/calcite-components@5.0.2/dist/calcite/calcite.css">
   <!-- ArcGIS Map Components 5.0 -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@arcgis/map-components@5.0.14/dist/arcgis-map-components/arcgis-map-components.css">
-  <!-- ArcGIS AI Components 5.0 -->
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@arcgis/ai-components@5.0.14/dist/cdn/main.css">
 
   <!--
-    Import map: resolves bare "@arcgis/core/..." specifiers used by the
-    map-components and ai-components CDN bundles to the ArcGIS 5.0 CDN.
+    Import map: resolves bare "@arcgis/core/..." specifiers used by map-components
+    to the ArcGIS 5.0 CDN.
   -->
   <script type="importmap">
   {
@@ -51,27 +47,24 @@
     }
     .title-bar .data-ref a { color: #a8d4f0; text-decoration: none; }
     .title-bar .data-ref a:hover { text-decoration: underline; }
-    .title-bar .auth {
+
+    /* status indicator */
+    .ai-status {
       margin-left: auto;
+      font-size: 0.75rem;
+      opacity: 0.85;
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
     }
-    #user-name {
-      font-size: 0.78rem;
-      opacity: 0.9;
+    .ai-status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #888;
     }
-    .auth-btn {
-      background: rgba(255,255,255,0.15);
-      color: white;
-      border: 1px solid rgba(255,255,255,0.4);
-      padding: 4px 10px;
-      border-radius: 4px;
-      font-size: 0.78rem;
-      cursor: pointer;
-      transition: background 0.2s;
-    }
-    .auth-btn:hover { background: rgba(255,255,255,0.25); }
+    .ai-status-dot.ready { background: #4caf50; }
+    .ai-status-dot.error { background: #f44336; }
 
     /* ── Main layout ───────────────────────────────────────────────────────── */
     .app-body {
@@ -96,7 +89,6 @@
       background: white;
     }
 
-    /* Clicking the label activates this map for the AI assistant */
     .map-label {
       position: absolute;
       top: 0;
@@ -107,30 +99,11 @@
       font-size: 0.7rem;
       font-weight: 500;
       z-index: 10;
-      cursor: pointer;
       user-select: none;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
       border-bottom: 1px solid rgba(0,0,0,0.08);
-      transition: background 0.15s;
-    }
-    .map-label:hover {
-      background: rgba(224, 240, 255, 0.95);
-    }
-
-    /* Active map: blue left border + dot indicator on the label */
-    .map-cell.active {
-      outline: 2px solid #00619b;
-      outline-offset: -2px;
-      z-index: 1;
-    }
-    .map-cell.active .map-label {
-      background: rgba(0, 97, 155, 0.1);
-    }
-    .map-cell.active .map-label::before {
-      content: "● ";
-      color: #00619b;
     }
 
     arcgis-map {
@@ -139,8 +112,8 @@
       height: 100%;
     }
 
-    /* ── AI Assistant sidebar ──────────────────────────────────────────────── */
-    .assistant-panel {
+    /* ── AI Chat sidebar ──────────────────────────────────────────────────── */
+    .chat-panel {
       width: 360px;
       flex-shrink: 0;
       border-left: 2px solid #d0d0d0;
@@ -149,26 +122,167 @@
       background: #f5f5f5;
     }
 
-    .assistant-header {
+    .chat-header {
       background: #00619b;
       color: white;
       padding: 10px 14px;
-      font-size: 0.9rem;
-      font-weight: 600;
       flex-shrink: 0;
     }
-    .assistant-header p {
+    .chat-header h2 {
+      font-size: 0.9rem;
+      font-weight: 600;
+      margin-bottom: 2px;
+    }
+    .chat-header p {
       font-size: 0.7rem;
       font-weight: 400;
       opacity: 0.8;
-      margin-top: 2px;
     }
 
-    arcgis-assistant {
-      display: flex;
+    /* messages area */
+    #chat-messages {
       flex: 1;
-      min-height: 0;
+      overflow-y: auto;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
     }
+
+    .msg {
+      max-width: 92%;
+      padding: 8px 11px;
+      border-radius: 10px;
+      font-size: 0.82rem;
+      line-height: 1.45;
+      word-wrap: break-word;
+    }
+    .msg.user {
+      align-self: flex-end;
+      background: #00619b;
+      color: white;
+      border-bottom-right-radius: 2px;
+    }
+    .msg.assistant {
+      align-self: flex-start;
+      background: white;
+      color: #222;
+      border: 1px solid #ddd;
+      border-bottom-left-radius: 2px;
+    }
+    .msg.system-msg {
+      align-self: center;
+      background: transparent;
+      color: #666;
+      font-size: 0.75rem;
+      font-style: italic;
+      border: none;
+      padding: 2px 6px;
+    }
+
+    /* typing indicator */
+    .typing-indicator {
+      align-self: flex-start;
+      background: white;
+      border: 1px solid #ddd;
+      border-radius: 10px;
+      border-bottom-left-radius: 2px;
+      padding: 10px 14px;
+      display: none;
+    }
+    .typing-indicator.visible { display: block; }
+    .typing-dots {
+      display: flex;
+      gap: 4px;
+    }
+    .typing-dots span {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #00619b;
+      animation: bounce 1.2s infinite ease-in-out;
+    }
+    .typing-dots span:nth-child(2) { animation-delay: 0.2s; }
+    .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes bounce {
+      0%, 80%, 100% { transform: scale(0.7); opacity: 0.5; }
+      40% { transform: scale(1); opacity: 1; }
+    }
+
+    /* suggested prompts */
+    .suggestions {
+      padding: 0 12px 8px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .suggestion-chip {
+      background: white;
+      border: 1px solid #c0d8ee;
+      color: #00619b;
+      border-radius: 14px;
+      padding: 4px 10px;
+      font-size: 0.73rem;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .suggestion-chip:hover { background: #e8f2fb; }
+
+    /* input row */
+    .chat-input-row {
+      display: flex;
+      gap: 6px;
+      padding: 10px 12px;
+      border-top: 1px solid #ddd;
+      background: white;
+      flex-shrink: 0;
+    }
+    #chat-input {
+      flex: 1;
+      border: 1px solid #ccc;
+      border-radius: 18px;
+      padding: 7px 13px;
+      font-size: 0.82rem;
+      font-family: inherit;
+      resize: none;
+      outline: none;
+      line-height: 1.4;
+      max-height: 120px;
+      overflow-y: auto;
+    }
+    #chat-input:focus { border-color: #00619b; }
+    #send-btn {
+      background: #00619b;
+      color: white;
+      border: none;
+      border-radius: 50%;
+      width: 36px;
+      height: 36px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      align-self: flex-end;
+      transition: background 0.15s;
+    }
+    #send-btn:hover { background: #004f7c; }
+    #send-btn:disabled { background: #aaa; cursor: not-allowed; }
+    #send-btn svg { width: 16px; height: 16px; fill: white; }
+
+    /* clear button */
+    #clear-btn {
+      background: transparent;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      padding: 4px 8px;
+      font-size: 0.72rem;
+      cursor: pointer;
+      color: #666;
+      margin: 0 12px 6px;
+      align-self: flex-start;
+    }
+    #clear-btn:hover { background: #eee; }
   </style>
 </head>
 <body>
@@ -182,22 +296,21 @@
       doi.org/10.1016/j.scitotenv.2025.180851
     </a>
   </span>
-  <div class="auth">
-    <span id="user-name"></span>
-    <button id="sign-in-btn" class="auth-btn">Sign In with ArcGIS</button>
-    <button id="sign-out-btn" class="auth-btn" hidden>Sign Out</button>
+  <div class="ai-status">
+    <div class="ai-status-dot" id="ai-dot"></div>
+    <span id="ai-status-text">Checking AI…</span>
   </div>
 </div>
 
 <!-- ── Main body ───────────────────────────────────────────────────────────── -->
 <div class="app-body">
 
-  <!-- 2 × 2 map grid ───────────────────────────────────────────────────────── -->
+  <!-- 2×2 map grid ───────────────────────────────────────────────────────── -->
   <div class="map-grid">
 
     <!-- Top-left: WWTP capacity + P fertilizer consumption -->
-    <div class="map-cell active" data-map-id="map-tl">
-      <div class="map-label" title="Click to focus AI assistant on this map">
+    <div class="map-cell" data-map-id="map-tl">
+      <div class="map-label">
         USA WWTPs Treatment Design Capacity Overlaid on Agricultural P Fertilizer Consumption
       </div>
       <arcgis-map id="map-tl" item-id="9bf5ad31c63e4eaa9156c9d9e21c47d7"></arcgis-map>
@@ -205,7 +318,7 @@
 
     <!-- Top-right: Largest 200 + agricultural belts -->
     <div class="map-cell" data-map-id="map-tr">
-      <div class="map-label" title="Click to focus AI assistant on this map">
+      <div class="map-label">
         Largest 200 WWTPs Sewage Sludge Phosphorus Overlaid on US Agricultural Belts
       </div>
       <arcgis-map id="map-tr" item-id="90b301b54dfa430dba961eeb5e8529de"></arcgis-map>
@@ -213,7 +326,7 @@
 
     <!-- Bottom-left: P Use Ratio Individual -->
     <div class="map-cell" data-map-id="map-bl">
-      <div class="map-label" title="Click to focus AI assistant on this map">
+      <div class="map-label">
         P Use Ratio (Individual County)
       </div>
       <arcgis-map id="map-bl" item-id="6fa5d1dc8aca4d9096835e66b0c301ca"></arcgis-map>
@@ -221,7 +334,7 @@
 
     <!-- Bottom-right: P Use Ratio Neighborhood -->
     <div class="map-cell" data-map-id="map-br">
-      <div class="map-label" title="Click to focus AI assistant on this map">
+      <div class="map-label">
         P Use Ratio (Neighborhood County)
       </div>
       <arcgis-map id="map-br" item-id="505d78215f1f46cb9ff49a2c94212415"></arcgis-map>
@@ -229,55 +342,53 @@
 
   </div>
 
-  <!-- AI Assistant sidebar ─────────────────────────────────────────────────── -->
-  <div class="assistant-panel">
-    <div class="assistant-header">
-      Spatial AI Assistant
-      <p>Click any map title to focus the assistant on that panel</p>
+  <!-- AI Chat sidebar ──────────────────────────────────────────────────────── -->
+  <div class="chat-panel">
+    <div class="chat-header">
+      <h2>Spatial AI Assistant</h2>
+      <p>Ask questions about phosphorus data, wastewater facilities, and agricultural regions</p>
     </div>
 
-    <!--
-      arcgis-assistant (ArcGIS Maps SDK 5.0 beta AI component)
-      - reference-element: the <arcgis-map> element to interact with
-      - Agents process natural language to navigate, query, filter, and explain the map
-      - Sign-in to ArcGIS Online is required to use the assistant
-    -->
-    <arcgis-assistant
-      id="assistant"
-      reference-element="#map-tl"
-      heading="Spatial AI Assistant"
-      description="Ask questions about phosphorus data, wastewater facilities, and agricultural regions"
-      entry-message="I can help you explore phosphorus cycling and agricultural data. Ask me to navigate the map, filter layers, query statistics, or explain what you see. Click a map title above to switch which panel I'm focused on."
-    >
-      <!-- Navigation: zoom to places, features, coordinates -->
-      <arcgis-assistant-navigation-agent></arcgis-assistant-navigation-agent>
+    <div id="chat-messages">
+      <div class="msg assistant">
+        I can help you explore phosphorus cycling and agricultural data. Ask me to navigate the maps, highlight facilities or counties, query statistics, or explain what you see.
+      </div>
+    </div>
 
-      <!-- Data exploration: query attributes, statistics, find features -->
-      <arcgis-assistant-data-exploration-agent></arcgis-assistant-data-exploration-agent>
+    <div class="typing-indicator" id="typing">
+      <div class="typing-dots">
+        <span></span><span></span><span></span>
+      </div>
+    </div>
 
-      <!-- Layer query: run SQL-style queries on feature layers -->
-      <arcgis-assistant-layer-query-agent></arcgis-assistant-layer-query-agent>
+    <div class="suggestions" id="suggestions">
+      <button class="suggestion-chip">How many WWTPs are in Iowa?</button>
+      <button class="suggestion-chip">Highest P fertilizer counties?</button>
+      <button class="suggestion-chip">Where is the corn belt?</button>
+      <button class="suggestion-chip">Top 10 facilities by phosphorus</button>
+      <button class="suggestion-chip">Show Gulf Coast region</button>
+    </div>
 
-      <!-- Layer filter: visually filter what's shown on the map -->
-      <arcgis-assistant-layer-filter-agent></arcgis-assistant-layer-filter-agent>
+    <button id="clear-btn">Clear conversation</button>
 
-      <!-- Help: explains the assistant's capabilities and the map data -->
-      <arcgis-assistant-help-agent></arcgis-assistant-help-agent>
-    </arcgis-assistant>
+    <div class="chat-input-row">
+      <textarea id="chat-input" rows="1" placeholder="Ask about phosphorus data…"></textarea>
+      <button id="send-btn" title="Send">
+        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+          <path d="M2 21l21-9L2 3v7l15 2-15 2z"/>
+        </svg>
+      </button>
+    </div>
   </div>
 
 </div>
 
 <!--
   Load order matters:
-  1. Calcite (UI system, required by AI components)
-  2. Map Components (provides <arcgis-map>)
-  3. AI Components (provides <arcgis-assistant> and agents)
-  4. App logic (OAuth setup, map switching)
+  1. Map Components (provides <arcgis-map>)
+  2. App logic (chat + map control)
 -->
-<script type="module" src="https://cdn.jsdelivr.net/npm/@esri/calcite-components@5.0.2/dist/calcite/calcite.esm.js"></script>
 <script type="module" src="https://cdn.jsdelivr.net/npm/@arcgis/map-components@5.0.14/dist/cdn/index.js"></script>
-<script type="module" src="https://cdn.jsdelivr.net/npm/@arcgis/ai-components@5.0.14/dist/cdn/index.js"></script>
 <script type="module" src="app.js"></script>
 
 </body>
