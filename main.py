@@ -30,10 +30,12 @@ Available data layers you can query: {', '.join(AGOL_LAYERS.keys())}
 Use query_arcgis to retrieve data and give precise, quantitative answers.
 You cannot control the map view — focus on answering data questions clearly.
 
-IMPORTANT — keep queries small to avoid token limits:
+IMPORTANT — keep every query minimal to conserve tokens:
 - For "how many" questions always set return_count_only=true.
-- Specify only the fields you need in out_fields (never use * unless necessary).
-- Use a specific where_clause to filter rows; avoid returning thousands of records.
+- Always filter with a specific where_clause (state, county, or facility name). Never query all records.
+- Request only 1–3 relevant fields in out_fields, never *.
+- Never sort, rank, or aggregate across the full dataset. Answer single-location lookups only.
+- Keep max_records at 10 or below.
 """
 
 # ── Claude tool definitions ───────────────────────────────────────────────────
