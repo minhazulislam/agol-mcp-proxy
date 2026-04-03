@@ -6,7 +6,7 @@ from fastapi.responses import FileResponse, JSONResponse
 
 # ── Claude API key from Render environment variable ──────────────────────────
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-CLAUDE_MODEL      = "claude-haiku-4-5-20251001"
+CLAUDE_MODEL      = "claude-opus-4-6"
 CLAUDE_URL        = "https://api.anthropic.com/v1/messages"
 
 # ── ArcGIS feature service endpoints ────────────────────────────────────────
